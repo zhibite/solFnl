@@ -269,10 +269,33 @@ async def home(request: Request):
 @app.get("/wallets", response_class=HTMLResponse)
 async def wallets_page(request: Request):
     db = get_db()
+    page = int(request.query_params.get("page", 1))
+    per_page = 50
+    
+    all_wallets = [dict(w) for w in db.list_wallets()]
+    total_wallets = len(all_wallets)
+    total_pages = (total_wallets + per_page - 1) // per_page
+    
+    # 确保页数有效
+    if page < 1:
+        page = 1
+    elif page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_wallets = all_wallets[start_idx:end_idx]
+    
     context = _make_json_safe({
         "title": "地址管理",
         "authed": is_authed(request),
-        "wallets": [dict(w) for w in db.list_wallets()],
+        "wallets": paginated_wallets,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total_wallets,
+            "total_pages": total_pages,
+        },
         "sync_state": _sync_state,
         "log": [dict(l) for l in db.get_sync_log(30)],
     })
@@ -630,6 +653,37 @@ async def api_profit_all(month: Optional[str] = None):
     total = sum(r["realized_profit"] for r in rows)
     return {"success": True, "month": month, "total_pnl": total,
             "wallets": rows}
+
+
+@app.post("/api/wallets")
+async def api_add_wallet_external(request: Request):
+    """Add a new address to track (external API, no login required).
+
+    Body: {"address": "<sol>", "label": "optional"}
+    Returns wallet info if created/updated.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "message": "body must be JSON"}
+    
+    address = str(body.get("address", "")).strip()
+    label = str(body.get("label", "")).strip()
+    
+    if not address:
+        return {"success": False, "message": "address required"}
+    if not _is_valid_sol_address(address):
+        return {"success": False, "message": "invalid solana address"}
+    
+    db = get_db()
+    try:
+        db.upsert_wallet(address, label=label, enabled=True)
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    
+    wallet = db.get_wallet(address)
+    log.info("[API] wallet added/updated: %s label=%s", address[:10], label)
+    return {"success": True, "wallet": dict(wallet)}
 
 
 @app.get("/api/wallets")

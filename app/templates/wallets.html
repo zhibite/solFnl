@@ -1,93 +1,180 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="text-xl font-bold mb-4">地址管理</h1>
+<div class="mb-8">
+    <h1 class="text-3xl font-bold">📋 地址管理</h1>
+    <p class="text-gray-400 text-sm mt-1">添加钱包地址、批量导入、查看同步日志</p>
+</div>
 
-<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
-        <h2 class="font-semibold mb-2">单个添加</h2>
+<!-- 操作卡片 -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <!-- 单个添加 -->
+    <div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover">
+        <h2 class="font-semibold mb-4 flex items-center gap-2">➕ 单个添加地址</h2>
+        <div class="space-y-3">
+            <input id="addrInput" placeholder="输入 Solana 地址"
+                   class="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
+            <input id="labelInput" placeholder="标签（可选，便于识别）"
+                   class="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
+            <button onclick="addWallet()" class="w-full btn-primary-gradient text-white py-2 rounded-lg text-sm font-medium transition">
+                ✓ 添加地址
+            </button>
+        </div>
+    </div>
+    
+    <!-- JSON 导入 -->
+    <div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover">
+        <h2 class="font-semibold mb-4 flex items-center gap-2">📤 批量导入</h2>
+        <p class="text-xs text-gray-400 mb-3">JSON 格式：[{"address":"...","label":"..."}]</p>
+        <textarea id="jsonInput" rows="3" placeholder='[{"address":"YOUR_SOL_ADDRESS","label":"钱包名称"}]'
+                  class="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2 text-xs font-mono focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition mb-3"></textarea>
         <div class="flex gap-2">
-            <input id="addrInput" placeholder="sol 地址"
-                   class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
-            <input id="labelInput" placeholder="备注"
-                   class="w-32 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
-            <button onclick="addWallet()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded text-sm">添加</button>
-        </div>
-    </div>
-    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
-        <h2 class="font-semibold mb-2">JSON 导入</h2>
-        <p class="text-xs text-gray-500 mb-2">格式：[{"address":"...","label":"..."}]，支持粘贴或上传文件</p>
-        <textarea id="jsonInput" rows="3" placeholder='[{"address":"YOUR_SOL_ADDRESS","label":"聪明钱01"}]'
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono focus:border-primary focus:outline-none"></textarea>
-        <div class="flex gap-2 mt-2">
-            <button onclick="importJson()" class="px-4 py-2 bg-success hover:bg-green-600 rounded text-sm">导入</button>
-            <label class="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm cursor-pointer">
-                上传文件<input id="fileInput" type="file" accept=".json" class="hidden" onchange="importFile()">
+            <button onclick="importJson()" class="flex-1 btn-success-gradient text-white py-2 rounded-lg text-sm font-medium transition">
+                ✓ 导入
+            </button>
+            <label class="flex-1 bg-gray-700/50 hover:bg-gray-700 text-white py-2 rounded-lg text-sm font-medium cursor-pointer transition text-center">
+                📁 文件<input id="fileInput" type="file" accept=".json" class="hidden" onchange="importFile()">
             </label>
-            <button onclick="syncNow()" class="px-4 py-2 bg-warning hover:bg-yellow-600 rounded text-sm">立即同步</button>
         </div>
-        <p id="importMsg" class="text-xs mt-2 text-gray-400"></p>
+        <p id="importMsg" class="text-xs mt-3 text-gray-400"></p>
     </div>
 </div>
 
-<div class="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto mb-6">
-    <table class="w-full text-sm">
-        <thead>
-            <tr class="text-left text-gray-400 border-b border-gray-700">
-                <th class="px-4 py-2">地址</th>
-                <th class="px-4 py-2">备注</th>
-                <th class="px-4 py-2">状态</th>
-                <th class="px-4 py-2">操作</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for w in wallets %}
-            <tr class="border-b border-gray-800 hover:bg-gray-700/40">
-                <td class="px-4 py-2 font-mono text-xs">{{ w.address }}</td>
-                <td class="px-4 py-2">{{ w.label }}</td>
-                <td class="px-4 py-2">
-                    {% if w.enabled %}<span class="text-xs text-success">同步中</span>
-                    {% else %}<span class="text-xs text-gray-500">已停用</span>{% endif %}
-                </td>
-                <td class="px-4 py-2 space-x-2">
-                    <a href="/wallet/{{ w.address }}" class="text-primary hover:underline text-xs">明细</a>
-                    <button onclick="toggleWallet('{{ w.address }}', {{ 0 if w.enabled else 1 }})"
-                            class="text-warning hover:underline text-xs">{% if w.enabled %}停用{% else %}启用{% endif %}</button>
-                    <button onclick="delWallet('{{ w.address }}')" class="text-danger hover:underline text-xs">删除</button>
-                </td>
-            </tr>
+<!-- 快速操作 -->
+<div class="mb-8">
+    <button onclick="syncNow()" class="bg-gradient-to-r from-warning to-amber-600 hover:from-amber-600 hover:to-warning text-white px-6 py-2.5 rounded-lg text-sm font-medium transition shadow-lg shadow-warning/30">
+        ⚡ 立即同步所有地址
+    </button>
+</div>
+
+<!-- 地址列表 -->
+<div class="bg-gray-800/30 rounded-xl border border-gray-700/50 overflow-hidden card-hover mb-8">
+    <div class="bg-gradient-to-r from-gray-800/50 to-gray-900/50 px-6 py-4 border-b border-gray-700/30 flex justify-between items-center">
+        <h2 class="font-semibold">📍 跟踪地址列表</h2>
+        {% if pagination.total > 0 %}
+        <span class="text-xs text-gray-400">共 {{ pagination.total }} 个地址，第 {{ pagination.page }}/{{ pagination.total_pages }} 页</span>
+        {% endif %}
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-gray-400 border-b border-gray-700/30 bg-gray-900/30">
+                    <th class="px-6 py-3">地址</th>
+                    <th class="px-6 py-3">标签</th>
+                    <th class="px-6 py-3">状态</th>
+                    <th class="px-6 py-3">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for w in wallets %}
+                <tr class="border-b border-gray-700/20 hover:bg-gray-700/20 transition">
+                    <td class="px-6 py-3 font-mono text-xs text-gray-300">{{ w.address }}</td>
+                    <td class="px-6 py-3 text-gray-200">{{ w.label if w.label else '-' }}</td>
+                    <td class="px-6 py-3">
+                        {% if w.enabled %}<span class="inline-block px-2 py-1 rounded-full bg-success/20 text-success text-xs">✓ 同步中</span>
+                        {% else %}<span class="inline-block px-2 py-1 rounded-full bg-gray-700/50 text-gray-400 text-xs">⊘ 已停用</span>{% endif %}
+                    </td>
+                    <td class="px-6 py-3 space-x-2">
+                        <a href="/wallet/{{ w.address }}" class="text-primary hover:text-blue-400 text-xs font-medium transition">📊 详情</a>
+                        <button onclick="toggleWallet('{{ w.address }}', {{ 0 if w.enabled else 1 }})" class="text-warning hover:text-amber-300 text-xs font-medium transition">
+                            {% if w.enabled %}⏸ 停用{% else %}▶ 启用{% endif %}
+                        </button>
+                        <button onclick="delWallet('{{ w.address }}')" class="text-danger hover:text-red-400 text-xs font-medium transition">🗑 删除</button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="px-6 py-12 text-center text-gray-500">
+                    暂无地址 · 上方添加地址或导入 JSON 来开始监控钱包
+                </td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- 分页控件 -->
+    {% if pagination.total_pages > 1 %}
+    <div class="flex justify-center items-center gap-2 px-6 py-4 border-t border-gray-700/30 bg-gray-900/20">
+        {% if pagination.page > 1 %}
+        <a href="?page=1" class="px-3 py-1.5 rounded-lg bg-gray-700/50 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition">首页</a>
+        <a href="?page={{ pagination.page - 1 }}" class="px-3 py-1.5 rounded-lg bg-gray-700/50 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition">上一页</a>
+        {% else %}
+        <span class="px-3 py-1.5 rounded-lg bg-gray-700/20 text-gray-600 text-xs font-medium cursor-not-allowed">首页</span>
+        <span class="px-3 py-1.5 rounded-lg bg-gray-700/20 text-gray-600 text-xs font-medium cursor-not-allowed">上一页</span>
+        {% endif %}
+        
+        <!-- 页码显示 -->
+        <div class="flex gap-1">
+            {% set start_page = [1, pagination.page - 2] | max %}
+            {% set end_page = [pagination.total_pages, pagination.page + 2] | min %}
+            
+            {% if start_page > 1 %}
+            <span class="px-2 py-1.5 text-gray-500 text-xs">...</span>
+            {% endif %}
+            
+            {% for p in range(start_page, end_page + 1) %}
+                {% if p == pagination.page %}
+                <span class="px-3 py-1.5 rounded-lg bg-primary/50 text-primary text-xs font-bold">{{ p }}</span>
+                {% else %}
+                <a href="?page={{ p }}" class="px-3 py-1.5 rounded-lg bg-gray-700/50 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition">{{ p }}</a>
+                {% endif %}
+            {% endfor %}
+            
+            {% if end_page < pagination.total_pages %}
+            <span class="px-2 py-1.5 text-gray-500 text-xs">...</span>
+            {% endif %}
+        </div>
+        
+        {% if pagination.page < pagination.total_pages %}
+        <a href="?page={{ pagination.page + 1 }}" class="px-3 py-1.5 rounded-lg bg-gray-700/50 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition">下一页</a>
+        <a href="?page={{ pagination.total_pages }}" class="px-3 py-1.5 rounded-lg bg-gray-700/50 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition">末页</a>
+        {% else %}
+        <span class="px-3 py-1.5 rounded-lg bg-gray-700/20 text-gray-600 text-xs font-medium cursor-not-allowed">下一页</span>
+        <span class="px-3 py-1.5 rounded-lg bg-gray-700/20 text-gray-600 text-xs font-medium cursor-not-allowed">末页</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- 同步日志 -->
+<div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover">
+    <div class="mb-4">
+        <h2 class="font-semibold mb-3">📜 同步日志（最近 30 条）</h2>
+        <div class="text-xs px-3 py-2 rounded-lg bg-gray-900/30 text-gray-300 border border-gray-700/30">
+            {% if sync_state.running %}
+                🔄 同步进行中…
+            {% elif sync_state.last_run %}
+                ✓ 上次同步：{{ sync_state.last_run }}
             {% else %}
-            <tr><td colspan="4" class="px-4 py-6 text-center text-gray-500">暂无地址</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-
-<div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
-    <h2 class="font-semibold mb-2">同步日志（最近 30 条）</h2>
-    <div class="text-xs text-gray-500 mb-2">
-        {% if sync_state.running %}同步进行中…
-        {% elif sync_state.last_run %}上次同步：{{ sync_state.last_run }}
-        {% else %}尚未同步过{% endif %}
+                ⊘ 尚未同步过
+            {% endif %}
+        </div>
     </div>
-    <table class="w-full text-xs font-mono">
-        <thead><tr class="text-left text-gray-500 border-b border-gray-700">
-            <th class="py-1">时间</th><th>地址</th><th>月份</th>
-            <th class="text-right">天数</th><th class="text-right">月盈利</th><th>状态</th>
-        </tr></thead>
-        <tbody>
-            {% for l in log %}
-            <tr class="border-b border-gray-800">
-                <td class="py-1 text-gray-400">{{ l.created_at[:19] }}</td>
-                <td>{{ l.wallet[:8] }}…</td>
-                <td>{{ l.month }}</td>
-                <td class="text-right">{{ l.days }}</td>
-                <td class="text-right {% if l.month_pnl >= 0 %}text-success{% else %}text-danger{% endif %}">
-                    {{ "%.2f"|format(l.month_pnl) }}</td>
-                <td class="{% if l.status != 'ok' %}text-danger{% endif %}">{{ l.status }} {{ l.message[:40] }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="overflow-x-auto">
+        <table class="w-full text-xs font-mono">
+            <thead>
+                <tr class="text-left text-gray-400 border-b border-gray-700/30 bg-gray-900/30">
+                    <th class="px-4 py-2">时间</th>
+                    <th class="px-4 py-2">地址</th>
+                    <th class="px-4 py-2">月份</th>
+                    <th class="px-4 py-2 text-right">天数</th>
+                    <th class="px-4 py-2 text-right">月盈利</th>
+                    <th class="px-4 py-2">状态</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in log %}
+                <tr class="border-b border-gray-700/20 hover:bg-gray-700/10 transition">
+                    <td class="px-4 py-2 text-gray-400">{{ l.created_at[:19] }}</td>
+                    <td>{{ l.wallet[:8] }}…</td>
+                    <td>{{ l.month }}</td>
+                    <td class="text-right">{{ l.days }}</td>
+                    <td class="text-right font-bold {% if l.month_pnl >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ "%.2f"|format(l.month_pnl) }}</td>
+                    <td class="{% if l.status != 'ok' %}text-danger{% else %}text-success{% endif %}">{{ l.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 {% endblock %}
 
@@ -112,7 +199,7 @@ async function addWallet() {
     if (r.success) location.reload(); else alert(r.message || '添加失败');
 }
 async function delWallet(address) {
-    if (!confirm('删除该地址及全部盈利数据？')) return;
+    if (!confirm('确定删除该地址及全部盈利数据？')) return;
     const r = await post('/api/wallets/delete', {address});
     if (r && r.success) location.reload(); else alert('删除失败');
 }
@@ -130,10 +217,10 @@ async function importJson() {
         const items = parseItems(document.getElementById('jsonInput').value);
         const r = await post('/api/wallets/import', {wallets: items});
         if (!r) return;
-        msg.textContent = r.success ? `导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('失败：' + r.message);
-        msg.className = 'text-xs mt-2 ' + (r.success ? 'text-success' : 'text-danger');
+        msg.textContent = r.success ? `✓ 导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 失败：' + r.message);
+        msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
         if (r.success) setTimeout(() => location.reload(), 800);
-    } catch (e) { msg.textContent = 'JSON 格式错误：' + e.message; msg.className = 'text-xs mt-2 text-danger'; }
+    } catch (e) { msg.textContent = '✗ JSON 格式错误：' + e.message; msg.className = 'text-xs mt-3 text-danger'; }
 }
 async function importFile() {
     const f = document.getElementById('fileInput').files[0];
@@ -143,15 +230,16 @@ async function importFile() {
     const res = await fetch('/api/wallets/import_file', {method: 'POST', body: fd});
     const r = await res.json();
     const msg = document.getElementById('importMsg');
-    msg.textContent = r.success ? `导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('失败：' + r.message);
+    msg.textContent = r.success ? `✓ 导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 失败：' + r.message);
+    msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
     if (r.success) setTimeout(() => location.reload(), 800);
 }
 async function syncNow() {
-    const msg = document.getElementById('importMsg');
-    msg.textContent = '同步中，请稍候…';
+    const msg = document.getElementById('importMsg') || (() => {const el = document.createElement('p'); el.id = 'importMsg'; document.body.appendChild(el); return el;})();
+    msg.textContent = '🔄 同步进行中，请稍候…';
     const r = await post('/api/sync/now', {});
     if (!r) return;
-    msg.textContent = r.success ? `同步完成：${r.wallets} 个地址` : ('失败：' + (r.message || '未知'));
+    msg.textContent = r.success ? `✓ 同步完成：${r.wallets} 个地址` : ('✗ 失败：' + (r.message || '未知'));
     if (r.success) setTimeout(() => location.reload(), 1000);
 }
 </script>
