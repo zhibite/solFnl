@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+    <h1 class="text-xl font-bold font-mono">{{ address[:10] }}…{{ address[-6:] }}</h1>
+    <form method="get" class="flex items-center gap-2">
+        <select name="month" onchange="this.form.submit()"
+                class="bg-gray-800 border border-gray-700 rounded px-3 py-1 text-sm">
+            {% for m in months %}
+            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+{% if label %}<p class="text-sm text-gray-400 mb-4">备注：{{ label }}</p>{% endif %}
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">{{ month }} 盈利</div>
+        <div class="text-2xl font-bold {% if summary.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
+            {{ "%.2f"|format(summary.realized_profit) }}</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">盈利 / 亏损</div>
+        <div class="text-lg font-bold"><span class="text-success">{{ "%.0f"|format(summary.gains) }}</span>
+            <span class="text-gray-500">/</span>
+            <span class="text-danger">{{ "%.0f"|format(summary.losses) }}</span></div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">买 / 卖笔数</div>
+        <div class="text-lg font-bold">{{ summary.buy_count }} / {{ summary.sell_count }}</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">有交易天数</div>
+        <div class="text-lg font-bold">{{ summary.days }}</div>
+    </div>
+</div>
+
+<div class="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead><tr class="text-left text-gray-400 border-b border-gray-700">
+            <th class="px-4 py-2">日期</th>
+            <th class="px-4 py-2 text-right">盈利</th>
+            <th class="px-4 py-2 text-right">盈利额</th>
+            <th class="px-4 py-2 text-right">亏损额</th>
+            <th class="px-4 py-2 text-right">买入量</th>
+            <th class="px-4 py-2 text-right">卖出量</th>
+            <th class="px-4 py-2 text-right">买/卖笔数</th>
+        </tr></thead>
+        <tbody>
+            {% for d in days %}
+            <tr class="border-b border-gray-800 hover:bg-gray-700/40">
+                <td class="px-4 py-2 font-mono">{{ d.date | int | timestamp_to_date }}</td>
+                <td class="px-4 py-2 text-right font-bold {% if d.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ "%.2f"|format(d.realized_profit) }}</td>
+                <td class="px-4 py-2 text-right text-success">{{ "%.2f"|format(d.gains) }}</td>
+                <td class="px-4 py-2 text-right text-danger">{{ "%.2f"|format(d.losses) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ "%.2f"|format(d.buy_volume) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ "%.2f"|format(d.sell_volume) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ d.buy_count }}/{{ d.sell_count }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="px-4 py-6 text-center text-gray-500">
+                该月暂无数据，请先在 <a href="/wallets" class="text-primary hover:underline">地址管理</a> 点“立即同步”
+            </td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

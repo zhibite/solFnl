@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">配置</h1>
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-xl">
+    <div class="mb-4">
+        <div class="text-sm text-gray-400 mb-1">debot 登录态（beegosessionID）</div>
+        <div class="font-mono text-sm">当前：{{ session_masked }}</div>
+        <p class="text-xs text-gray-500 mt-1">过期后去 debot.ai 重新登录，把 Cookie 里 beegosessionID 的值粘进来保存</p>
+    </div>
+    <div class="flex gap-2">
+        <input id="sidInput" type="password" placeholder="粘贴新的 beegosessionID"
+               class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+        <button onclick="saveSession()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded text-sm">保存并验证</button>
+    </div>
+    <p id="sidMsg" class="text-xs mt-2 text-gray-400"></p>
+    <div class="mt-6 text-sm text-gray-400 space-y-1">
+        <div>同步间隔：{{ interval }} 分钟（环境变量 SYNC_INTERVAL_MIN）</div>
+        <div>同步月份：当月 + 往前 {{ months_back }} 个月（环境变量 SYNC_MONTHS_BACK）</div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function saveSession() {
+    const msg = document.getElementById('sidMsg');
+    const sid = document.getElementById('sidInput').value.trim();
+    if (!sid) { alert('请粘贴 session id'); return; }
+    const res = await fetch('/api/config/session', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_id: sid})});
+    const r = await res.json();
+    if (r.success) {
+        msg.textContent = r.valid ? '保存成功，登录态有效 ✓' : '已保存，但校验未通过：' + (r.message || '');
+        msg.className = 'text-xs mt-2 ' + (r.valid ? 'text-success' : 'text-warning');
+        if (r.valid) setTimeout(() => location.reload(), 800);
+    } else { msg.textContent = '失败：' + r.message; msg.className = 'text-xs mt-2 text-danger'; }
+}
+</script>
+{% endblock %}

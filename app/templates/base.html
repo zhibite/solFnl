@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ title }}{% endblock %} - GMGN Daily</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: {
+                primary: '#3b82f6', success: '#10b981',
+                danger: '#ef4444', warning: '#f59e0b' } } }
+    </script>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center space-x-8">
+                    <a href="/" class="text-xl font-bold text-primary">GMGN Daily</a>
+                    <div class="flex space-x-4">
+                        <a href="/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/' %}bg-gray-700{% endif %}">盈利总览</a>
+                        <a href="/wallets" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path.startswith('/wallet') or request.url.path.startswith('/profit') %}bg-gray-700{% endif %}">地址管理</a>
+                        <a href="/config" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/config' %}bg-gray-700{% endif %}">配置</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    {% if authed %}
+                    <span class="text-xs text-success">已登录</span>
+                    <a href="/logout" class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:border-gray-500">退出</a>
+                    {% else %}
+                    <a href="/login" class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:border-gray-500">登录</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="bg-gray-800 border-t border-gray-700 mt-8">
+        <div class="max-w-7xl mx-auto px-4 py-4">
+            <div class="text-center text-sm text-gray-500">
+                GMGN Daily · debot sol 钱包日盈利爬虫
+            </div>
+        </div>
+    </footer>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,160 @@
+"""GMGN daily_profits 接口客户端.
+
+接口形态 (实测确认, 2026-10-27):
+  POST https://gmgn.ai/pf/api/v1/wallets/{chain}/daily_profits
+  body: {"wallet_addresses": ["<addr>", ...], "start_at": <unix秒>, "end_at": <unix秒>}
+  resp: {"code": 0, "message": "success", "data": {"list": [ {...日记录...} ]}}
+
+要点:
+  - 是 POST, 不是 GET. 抓包里那种 `...?device_id=...` 的 URL 用 GET 打永远是 404.
+  - 无需鉴权: 不带 token / 不带公共 query 参数都能拿到 code=0.
+  - 时间跨度必须 < 1 年, 否则报 "time range must be less than 1 year".
+  - start_at 必填, end_at 可选 (不给则取到今天).
+  - **多钱包会求和合并**, 不能一次查多个地址. 要逐个钱包查.
+  - 地址在响应里不带标识, 单钱包查询才安全.
+
+字段 (与 docs/gmgn-daily.md 一一对应):
+  date                    unix 秒, UTC 零点
+  total_profit            当日已实现盈亏 (字符串, 需转 float)
+  total_buys / total_sells            买入 / 卖出笔数
+  total_transfer_ins / _outs          转入 / 转出笔数
+  buy_amount_usd / sell_amount_usd    买入 / 卖出金额 (USD)
+  transfer_in_amount_usd / transfer_out_amount_usd
+  win_sells / loss_sells              盈利单数 / 亏损单数
+  win_profit / loss_profit            盈利合计 / 亏损合计 (loss 为负)
+"""
+
+import json
+import urllib.error
+import urllib.request
+from typing import Any, Dict, List, Optional
+
+BASE_URL = "https://gmgn.ai"
+DAILY_PROFITS_PATH = "/pf/api/v1/wallets/{chain}/daily_profits"
+
+#: 一年秒数 — 接口硬限制: time range must be less than 1 year
+MAX_RANGE_SECONDS = 365 * 24 * 3600
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "Referer": "https://gmgn.ai/",
+    "Origin": "https://gmgn.ai",
+}
+
+
+class GMGNError(Exception):
+    """GMGN 接口返回 code != 0, 或 HTTP/网络错误."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(f"gmgn api error code={code}: {message}")
+        self.code = code
+        self.message = message
+
+
+def _to_float(v: Any) -> float:
+    if v is None or v == "":
+        return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def normalize(item: Dict[str, Any]) -> Dict[str, Any]:
+    """把接口返回的一条日记录转成规整的 dict."""
+    return {
+        "date": int(item.get("date", 0)),
+        "total_profit": _to_float(item.get("total_profit")),
+        "total_buys": int(item.get("total_buys", 0) or 0),
+        "total_sells": int(item.get("total_sells", 0) or 0),
+        "total_transfer_ins": int(item.get("total_transfer_ins", 0) or 0),
+        "total_transfer_outs": int(item.get("total_transfer_outs", 0) or 0),
+        "buy_amount_usd": _to_float(item.get("buy_amount_usd")),
+        "sell_amount_usd": _to_float(item.get("sell_amount_usd")),
+        "transfer_in_amount_usd": _to_float(item.get("transfer_in_amount_usd")),
+        "transfer_out_amount_usd": _to_float(item.get("transfer_out_amount_usd")),
+        "win_sells": int(item.get("win_sells", 0) or 0),
+        "loss_sells": int(item.get("loss_sells", 0) or 0),
+        "win_profit": _to_float(item.get("win_profit")),
+        "loss_profit": _to_float(item.get("loss_profit")),
+    }
+
+
+class GMGNDailyClient:
+    """GMGN 单钱包每日盈利客户端.
+
+    用法:
+        c = GMGNDailyClient()
+        days = c.fetch_daily("215nhc...", "2026-09-01", "2026-10-01")
+        print(sum(d["total_profit"] for d in days))
+    """
+
+    def __init__(self, base_url: str = BASE_URL, chain: str = "sol",
+                 timeout: int = 25):
+        self.base_url = base_url.rstrip("/")
+        self.chain = chain
+        self.timeout = timeout
+
+    def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}{path}"
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=HEADERS,
+                                     method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            raise GMGNError(-e.code, f"HTTP {e.code}: {e.read()[:200]!r}")
+        except Exception as e:  # noqa: BLE001
+            raise GMGNError(-1, f"{type(e).__name__}: {e}")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise GMGNError(-1, f"invalid JSON: {e}, body={raw[:200]!r}")
+        code = payload.get("code", -1)
+        if code != 0:
+            msg = (payload.get("message") or payload.get("reason")
+                   or payload.get("msg") or "unknown")
+            raise GMGNError(code, str(msg))
+        return payload.get("data") or {}
+
+    def fetch_daily(self, wallet: str, start_at: int,
+                    end_at: Optional[int] = None) -> List[Dict[str, Any]]:
+        """拉一个钱包的每日盈利.
+
+        start_at / end_at 为 unix 秒.
+        end_at 省略时取到当前时间.
+        注意: 一次只能传一个钱包, 多个地址会被服务端求和合并.
+        """
+        if not wallet or not wallet.strip():
+            raise ValueError("wallet is required")
+        if end_at is not None and end_at - start_at >= MAX_RANGE_SECONDS:
+            raise ValueError(
+                f"time range must be less than 1 year "
+                f"(got {end_at - start_at}s, max {MAX_RANGE_SECONDS}s)")
+        body: Dict[str, Any] = {
+            "wallet_addresses": [wallet.strip()],
+            "start_at": int(start_at),
+        }
+        if end_at is not None:
+            body["end_at"] = int(end_at)
+        path = DAILY_PROFITS_PATH.format(chain=self.chain)
+        data = self._post(path, body)
+        return [normalize(d) for d in (data.get("list") or [])]
+
+    def fetch_daily_many(self, wallets: List[str], start_at: int,
+                         end_at: Optional[int] = None
+                         ) -> Dict[str, List[Dict[str, Any]]]:
+        """逐个钱包拉取, 返回 {wallet: [日记录...]}.
+
+        服务端对多地址请求会求和合并, 所以这里串行单查.
+        """
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for w in wallets:
+            out[w] = self.fetch_daily(w, start_at, end_at)
+        return out

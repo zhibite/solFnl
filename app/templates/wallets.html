@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">地址管理</h1>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h2 class="font-semibold mb-2">单个添加</h2>
+        <div class="flex gap-2">
+            <input id="addrInput" placeholder="sol 地址"
+                   class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+            <input id="labelInput" placeholder="备注"
+                   class="w-32 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+            <button onclick="addWallet()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded text-sm">添加</button>
+        </div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h2 class="font-semibold mb-2">JSON 导入</h2>
+        <p class="text-xs text-gray-500 mb-2">格式：[{"address":"...","label":"..."}]，支持粘贴或上传文件</p>
+        <textarea id="jsonInput" rows="3" placeholder='[{"address":"YOUR_SOL_ADDRESS","label":"聪明钱01"}]'
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono focus:border-primary focus:outline-none"></textarea>
+        <div class="flex gap-2 mt-2">
+            <button onclick="importJson()" class="px-4 py-2 bg-success hover:bg-green-600 rounded text-sm">导入</button>
+            <label class="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm cursor-pointer">
+                上传文件<input id="fileInput" type="file" accept=".json" class="hidden" onchange="importFile()">
+            </label>
+            <button onclick="syncNow()" class="px-4 py-2 bg-warning hover:bg-yellow-600 rounded text-sm">立即同步</button>
+        </div>
+        <p id="importMsg" class="text-xs mt-2 text-gray-400"></p>
+    </div>
+</div>
+
+<div class="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto mb-6">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-gray-400 border-b border-gray-700">
+                <th class="px-4 py-2">地址</th>
+                <th class="px-4 py-2">备注</th>
+                <th class="px-4 py-2">状态</th>
+                <th class="px-4 py-2">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for w in wallets %}
+            <tr class="border-b border-gray-800 hover:bg-gray-700/40">
+                <td class="px-4 py-2 font-mono text-xs">{{ w.address }}</td>
+                <td class="px-4 py-2">{{ w.label }}</td>
+                <td class="px-4 py-2">
+                    {% if w.enabled %}<span class="text-xs text-success">同步中</span>
+                    {% else %}<span class="text-xs text-gray-500">已停用</span>{% endif %}
+                </td>
+                <td class="px-4 py-2 space-x-2">
+                    <a href="/wallet/{{ w.address }}" class="text-primary hover:underline text-xs">明细</a>
+                    <button onclick="toggleWallet('{{ w.address }}', {{ 0 if w.enabled else 1 }})"
+                            class="text-warning hover:underline text-xs">{% if w.enabled %}停用{% else %}启用{% endif %}</button>
+                    <button onclick="delWallet('{{ w.address }}')" class="text-danger hover:underline text-xs">删除</button>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="px-4 py-6 text-center text-gray-500">暂无地址</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <h2 class="font-semibold mb-2">同步日志（最近 30 条）</h2>
+    <div class="text-xs text-gray-500 mb-2">
+        {% if sync_state.running %}同步进行中…
+        {% elif sync_state.last_run %}上次同步：{{ sync_state.last_run }}
+        {% else %}尚未同步过{% endif %}
+    </div>
+    <table class="w-full text-xs font-mono">
+        <thead><tr class="text-left text-gray-500 border-b border-gray-700">
+            <th class="py-1">时间</th><th>地址</th><th>月份</th>
+            <th class="text-right">天数</th><th class="text-right">月盈利</th><th>状态</th>
+        </tr></thead>
+        <tbody>
+            {% for l in log %}
+            <tr class="border-b border-gray-800">
+                <td class="py-1 text-gray-400">{{ l.created_at[:19] }}</td>
+                <td>{{ l.wallet[:8] }}…</td>
+                <td>{{ l.month }}</td>
+                <td class="text-right">{{ l.days }}</td>
+                <td class="text-right {% if l.month_pnl >= 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ "%.2f"|format(l.month_pnl) }}</td>
+                <td class="{% if l.status != 'ok' %}text-danger{% endif %}">{{ l.status }} {{ l.message[:40] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function post(url, body) {
+    const res = await fetch(url, {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body || {})});
+    if (res.url && res.url.includes('/login')) {
+        location.href = '/login?next=' + encodeURIComponent(location.pathname);
+        return null;
+    }
+    return res.json();
+}
+async function addWallet() {
+    const address = document.getElementById('addrInput').value.trim();
+    const label = document.getElementById('labelInput').value.trim();
+    if (!address) { alert('请输入地址'); return; }
+    const r = await post('/api/wallets/add', {address, label});
+    if (!r) return;
+    if (r.success) location.reload(); else alert(r.message || '添加失败');
+}
+async function delWallet(address) {
+    if (!confirm('删除该地址及全部盈利数据？')) return;
+    const r = await post('/api/wallets/delete', {address});
+    if (r && r.success) location.reload(); else alert('删除失败');
+}
+async function toggleWallet(address, enabled) {
+    const r = await post('/api/wallets/toggle', {address, enabled: !!enabled});
+    if (r && r.success) location.reload();
+}
+function parseItems(text) {
+    const data = JSON.parse(text);
+    return Array.isArray(data) ? data : (data.wallets || []);
+}
+async function importJson() {
+    const msg = document.getElementById('importMsg');
+    try {
+        const items = parseItems(document.getElementById('jsonInput').value);
+        const r = await post('/api/wallets/import', {wallets: items});
+        if (!r) return;
+        msg.textContent = r.success ? `导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('失败：' + r.message);
+        msg.className = 'text-xs mt-2 ' + (r.success ? 'text-success' : 'text-danger');
+        if (r.success) setTimeout(() => location.reload(), 800);
+    } catch (e) { msg.textContent = 'JSON 格式错误：' + e.message; msg.className = 'text-xs mt-2 text-danger'; }
+}
+async function importFile() {
+    const f = document.getElementById('fileInput').files[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append('file', f);
+    const res = await fetch('/api/wallets/import_file', {method: 'POST', body: fd});
+    const r = await res.json();
+    const msg = document.getElementById('importMsg');
+    msg.textContent = r.success ? `导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('失败：' + r.message);
+    if (r.success) setTimeout(() => location.reload(), 800);
+}
+async function syncNow() {
+    const msg = document.getElementById('importMsg');
+    msg.textContent = '同步中，请稍候…';
+    const r = await post('/api/sync/now', {});
+    if (!r) return;
+    msg.textContent = r.success ? `同步完成：${r.wallets} 个地址` : ('失败：' + (r.message || '未知'));
+    if (r.success) setTimeout(() => location.reload(), 1000);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+    <h1 class="text-xl font-bold">地址盈利总览</h1>
+    <form method="get" action="/" class="flex items-center gap-2">
+        <select name="month" onchange="this.form.submit()"
+                class="bg-gray-800 border border-gray-700 rounded px-3 py-1 text-sm">
+            {% for m in months %}
+            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">{{ month }} 总盈利</div>
+        <div class="text-2xl font-bold {% if total >= 0 %}text-success{% else %}text-danger{% endif %}">
+            {{ "%.2f"|format(total) }}
+        </div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">跟踪地址数</div>
+        <div class="text-2xl font-bold text-white">{{ rows|length }}</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">数据来源</div>
+        <div class="text-sm text-gray-300 mt-1">debot.ai · solana · 每日自动同步</div>
+    </div>
+</div>
+
+<div class="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-left text-gray-400 border-b border-gray-700">
+                <th class="px-4 py-2">地址</th>
+                <th class="px-4 py-2">备注</th>
+                <th class="px-4 py-2 text-right">天数</th>
+                <th class="px-4 py-2 text-right">盈利</th>
+                <th class="px-4 py-2 text-right">盈利额</th>
+                <th class="px-4 py-2 text-right">亏损额</th>
+                <th class="px-4 py-2 text-right">买/卖笔数</th>
+                <th class="px-4 py-2">状态</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in rows %}
+            <tr class="border-b border-gray-800 hover:bg-gray-700/40">
+                <td class="px-4 py-2 font-mono">
+                    <a href="/profit/{{ r.wallet }}?month={{ month }}" class="text-primary hover:underline">
+                        {{ r.wallet[:6] }}…{{ r.wallet[-4:] }}
+                    </a>
+                </td>
+                <td class="px-4 py-2 text-gray-300">{{ r.label }}</td>
+                <td class="px-4 py-2 text-right">{{ r.days }}</td>
+                <td class="px-4 py-2 text-right font-bold {% if r.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ "%.2f"|format(r.realized_profit) }}
+                </td>
+                <td class="px-4 py-2 text-right text-success">{{ "%.2f"|format(r.gains) }}</td>
+                <td class="px-4 py-2 text-right text-danger">{{ "%.2f"|format(r.losses) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ r.buy_count }}/{{ r.sell_count }}</td>
+                <td class="px-4 py-2">
+                    {% if r.enabled %}<span class="text-xs text-success">同步中</span>
+                    {% else %}<span class="text-xs text-gray-500">已停用</span>{% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="px-4 py-6 text-center text-gray-500">
+                还没有地址，去 <a href="/wallets" class="text-primary hover:underline">地址管理</a> 导入吧
+            </td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-6 bg-gray-800 rounded-lg p-4 border border-gray-700 text-sm text-gray-400">
+    <div class="font-semibold text-gray-300 mb-1">对外 API（供外部直接调用）</div>
+    <div class="font-mono text-xs space-y-1">
+        <div>GET /profit/&lt;address&gt;?month={{ month }}　→ 单地址盈利页（可分享）</div>
+        <div>POST /api/track {"address","label?","months?"}　→ 新增地址并抓取入库</div>
+        <div>GET /api/profit?month={{ month }}　→ 全部地址月汇总</div>
+        <div>GET /api/profit/&lt;address&gt;?month={{ month }}　→ 单地址每日明细</div>
+        <div>GET /api/wallets　→ 地址列表</div>
+        <div>GET /api/health　→ 健康检查</div>
+    </div>
+</div>
+{% endblock %}

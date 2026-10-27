@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <div>
+        <div class="flex items-center gap-2">
+            <h1 class="text-xl font-bold">地址盈利</h1>
+            {% if label %}<span class="text-xs px-2 py-1 rounded bg-gray-700 text-gray-200">{{ label }}</span>{% endif %}
+        </div>
+        <div class="mt-1 flex items-center gap-2 text-sm text-gray-400">
+            <code id="addrText" class="font-mono text-xs break-all">{{ address }}</code>
+            <button onclick="copyAddr()" class="text-xs px-2 py-1 rounded border border-gray-700 hover:border-gray-500">复制</button>
+            <a href="/api/profit/{{ address }}?month={{ month }}" target="_blank" class="text-xs text-primary hover:underline">API</a>
+        </div>
+    </div>
+    <form method="get" class="flex items-center gap-2">
+        <select name="month" onchange="this.form.submit()"
+                class="bg-gray-800 border border-gray-700 rounded px-3 py-1 text-sm">
+            {% for m in months %}
+            <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">{{ month }} 净盈利</div>
+        <div class="text-2xl font-bold {% if summary.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
+            {{ "%.2f"|format(summary.realized_profit) }}</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">盈利天 / 亏损天</div>
+        <div class="text-lg font-bold"><span class="text-success">{{ win_days }}</span>
+            <span class="text-gray-500">/</span>
+            <span class="text-danger">{{ loss_days }}</span></div>
+        <div class="text-xs text-gray-500 mt-1">共 {{ summary.days }} 个有交易日</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">盈利额 / 亏损额</div>
+        <div class="text-lg font-bold"><span class="text-success">{{ "%.0f"|format(summary.gains) }}</span>
+            <span class="text-gray-500">/</span>
+            <span class="text-danger">{{ "%.0f"|format(summary.losses) }}</span></div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">单日最佳</div>
+        <div class="text-lg font-bold text-success">{{ "%.2f"|format(best_day.pnl) }}</div>
+        <div class="text-xs text-gray-500 font-mono">{{ best_day.date }}</div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">单日最差</div>
+        <div class="text-lg font-bold text-danger">{{ "%.2f"|format(worst_day.pnl) }}</div>
+        <div class="text-xs text-gray-500 font-mono">{{ worst_day.date }}</div>
+    </div>
+</div>
+
+<div class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-6">
+    <div class="font-semibold mb-2">{{ month }} 每日盈利 + 累计曲线</div>
+    <div id="pnlChart" style="height:320px;"></div>
+    {% if not days %}<p class="text-sm text-gray-500 mt-2">该月暂无数据，先去地址管理页做一次同步。</p>{% endif %}
+</div>
+
+<div class="bg-gray-800 rounded-lg border border-gray-700 overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead><tr class="text-left text-gray-400 border-b border-gray-700">
+            <th class="px-4 py-2">日期</th>
+            <th class="px-4 py-2 text-right">盈利</th>
+            <th class="px-4 py-2 text-right">盈利额</th>
+            <th class="px-4 py-2 text-right">亏损额</th>
+            <th class="px-4 py-2 text-right">买入量</th>
+            <th class="px-4 py-2 text-right">卖出量</th>
+            <th class="px-4 py-2 text-right">买/卖笔数</th>
+        </tr></thead>
+        <tbody>
+            {% for d in days %}
+            <tr class="border-b border-gray-800 hover:bg-gray-700/40">
+                <td class="px-4 py-2 font-mono">{{ d.date | int | timestamp_to_date }}</td>
+                <td class="px-4 py-2 text-right font-bold {% if d.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ "%.2f"|format(d.realized_profit) }}</td>
+                <td class="px-4 py-2 text-right text-success">{{ "%.2f"|format(d.gains) }}</td>
+                <td class="px-4 py-2 text-right text-danger">{{ "%.2f"|format(d.losses) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ "%.2f"|format(d.buy_volume) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ "%.2f"|format(d.sell_volume) }}</td>
+                <td class="px-4 py-2 text-right text-gray-300">{{ d.buy_count }}/{{ d.sell_count }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="px-4 py-6 text-center text-gray-500">
+                该月暂无数据，请先在 <a href="/wallets" class="text-primary hover:underline">地址管理</a> 点“立即同步”
+            </td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyAddr() {
+    const t = document.getElementById('addrText').textContent.trim();
+    navigator.clipboard.writeText(t).then(() => alert('地址已复制'));
+}
+(function () {
+    const el = document.getElementById('pnlChart');
+    if (!el || typeof echarts === 'undefined') return;
+    const dates = {{ chart_dates | tojson }};
+    const pnls = {{ chart_pnls | tojson }};
+    const cum = [];
+    let acc = 0;
+    pnls.forEach(v => { acc += v; cum.push(Number(acc.toFixed(2))); });
+    const chart = echarts.init(el, 'dark');
+    chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['每日盈利', '累计盈利'], textStyle: { color: '#9ca3af' } },
+        grid: { left: 60, right: 20, top: 40, bottom: 30 },
+        xAxis: { type: 'category', data: dates, axisLabel: { color: '#9ca3af', fontSize: 10 } },
+        yAxis: { type: 'value', axisLabel: { color: '#9ca3af' }, splitLine: { lineStyle: { color: '#374151' } } },
+        series: [
+            {
+                name: '每日盈利', type: 'bar',
+                data: pnls.map(v => Number(v.toFixed(2))),
+                itemStyle: { color: p => p.value >= 0 ? '#10b981' : '#ef4444' }
+            },
+            { name: '累计盈利', type: 'line', data: cum, smooth: true, lineStyle: { color: '#3b82f6', width: 2 } }
+        ]
+    });
+    window.addEventListener('resize', () => chart.resize());
+})();
+</script>
+{% endblock %}
