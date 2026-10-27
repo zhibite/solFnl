@@ -209,26 +209,35 @@ async def home(request: Request):
     wallets = db.list_wallets()
     month = request.query_params.get("month") or _target_months(0)[0]
     summaries = db.get_all_summaries(month)
-    by_addr = {w["address"]: w for w in wallets}
+    by_addr = {str(w["address"]): w for w in wallets}
     rows = [{**s, "label": by_addr.get(s["wallet"], {}).get("label", ""),
              "enabled": by_addr.get(s["wallet"], {}).get("enabled", 0)}
             for s in summaries]
     total = sum(r["realized_profit"] for r in rows)
-    return templates.TemplateResponse("index.html", {
-        "request": request, "title": "地址盈利总览",
-        "authed": is_authed(request), "rows": rows, "month": month,
-        "total": total, "months": _target_months(6),
-    })
+    context = {
+        "request": request,
+        "title": "地址盈利总览",
+        "authed": is_authed(request),
+        "rows": rows,
+        "month": month,
+        "total": total,
+        "months": _target_months(6),
+    }
+    return templates.TemplateResponse("index.html", context)
 
 
 @app.get("/wallets", response_class=HTMLResponse)
 async def wallets_page(request: Request):
     db = get_db()
-    return templates.TemplateResponse("wallets.html", {
-        "request": request, "title": "地址管理",
-        "authed": is_authed(request), "wallets": db.list_wallets(),
-        "sync_state": _sync_state, "log": db.get_sync_log(30),
-    })
+    context = {
+        "request": request,
+        "title": "地址管理",
+        "authed": is_authed(request),
+        "wallets": db.list_wallets(),
+        "sync_state": _sync_state,
+        "log": db.get_sync_log(30),
+    }
+    return templates.TemplateResponse("wallets.html", context)
 
 
 @app.get("/wallet/{address}", response_class=HTMLResponse)
@@ -237,14 +246,19 @@ async def wallet_detail(request: Request, address: str):
     month = request.query_params.get("month") or _target_months(0)[0]
     days = db.get_daily(address, month)
     summary = db.get_month_summary(address, month)
-    wallets = {w["address"]: w for w in db.list_wallets()}
-    return templates.TemplateResponse("detail.html", {
-        "request": request, "title": f"地址 {address[:8]}…",
-        "authed": is_authed(request), "address": address,
+    wallets = {str(w["address"]): w for w in db.list_wallets()}
+    context = {
+        "request": request,
+        "title": f"地址 {address[:8]}…",
+        "authed": is_authed(request),
+        "address": address,
         "label": wallets.get(address, {}).get("label", ""),
-        "days": days, "summary": summary, "month": month,
+        "days": days,
+        "summary": summary,
+        "month": month,
         "months": _target_months(6),
-    })
+    }
+    return templates.TemplateResponse("detail.html", context)
 
 
 @app.get("/profit/{address}", response_class=HTMLResponse)
@@ -254,7 +268,7 @@ async def profit_page(request: Request, address: str):
     month = request.query_params.get("month") or _target_months(0)[0]
     days = db.get_daily(address, month)
     summary = db.get_month_summary(address, month)
-    wallets = {w["address"]: w for w in db.list_wallets()}
+    wallets = {str(w["address"]): w for w in db.list_wallets()}
     win_days = sum(1 for d in days if d["realized_profit"] >= 0)
     loss_days = len(days) - win_days
     if days:
@@ -267,17 +281,24 @@ async def profit_page(request: Request, address: str):
     else:
         best_day = {"pnl": 0.0, "date": "-"}
         worst_day = {"pnl": 0.0, "date": "-"}
-    return templates.TemplateResponse("profit.html", {
-        "request": request, "title": f"盈利 {address[:8]}…",
-        "authed": is_authed(request), "address": address,
+    context = {
+        "request": request,
+        "title": f"盈利 {address[:8]}…",
+        "authed": is_authed(request),
+        "address": address,
         "label": wallets.get(address, {}).get("label", ""),
-        "days": days, "summary": summary, "month": month,
+        "days": days,
+        "summary": summary,
+        "month": month,
         "months": _target_months(6),
-        "win_days": win_days, "loss_days": loss_days,
-        "best_day": best_day, "worst_day": worst_day,
+        "win_days": win_days,
+        "loss_days": loss_days,
+        "best_day": best_day,
+        "worst_day": worst_day,
         "chart_dates": [_ts_to_date(d["date"]) for d in days],
         "chart_pnls": [d["realized_profit"] for d in days],
-    })
+    }
+    return templates.TemplateResponse("profit.html", context)
 
 
 @app.get("/config", response_class=HTMLResponse, dependencies=[Depends(require_login)])
@@ -285,20 +306,27 @@ async def config_page(request: Request):
     db = get_db()
     sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
     masked = (sid[:6] + "…" + sid[-4:]) if sid else "(未配置)"
-    return templates.TemplateResponse("config.html", {
-        "request": request, "title": "配置",
-        "session_masked": masked, "has_session": bool(sid),
-        "interval": SYNC_INTERVAL_MIN, "months_back": SYNC_MONTHS_BACK,
-    })
+    context = {
+        "request": request,
+        "title": "配置",
+        "session_masked": masked,
+        "has_session": bool(sid),
+        "interval": SYNC_INTERVAL_MIN,
+        "months_back": SYNC_MONTHS_BACK,
+    }
+    return templates.TemplateResponse("config.html", context)
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = "/"):
     if is_authed(request):
         return RedirectResponse(url=next or "/", status_code=302)
-    return templates.TemplateResponse("login.html", {
-        "request": request, "error": request.query_params.get("error"),
-        "next": next or "/"})
+    context = {
+        "request": request,
+        "error": request.query_params.get("error"),
+        "next": next or "/",
+    }
+    return templates.TemplateResponse("login.html", context)
 
 
 @app.post("/login")
@@ -309,8 +337,12 @@ async def login_submit(request: Request, username: str = Form(...),
         target = next if next.startswith("/") and not next.startswith("//") else "/"
         log.info("[AUTH] login ok user=%s", username)
         return RedirectResponse(url=target, status_code=302)
-    return templates.TemplateResponse("login.html", {
-        "request": request, "error": "用户名或密码错误", "next": next or "/"})
+    context = {
+        "request": request,
+        "error": "用户名或密码错误",
+        "next": next or "/",
+    }
+    return templates.TemplateResponse("login.html", context)
 
 
 @app.get("/logout")
