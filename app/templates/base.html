@@ -8,44 +8,63 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
-            theme: { extend: { colors: {
-                primary: '#3b82f6', success: '#10b981',
-                danger: '#ef4444', warning: '#f59e0b' } } }
+            theme: { 
+                extend: { 
+                    colors: {
+                        primary: '#3b82f6', 
+                        success: '#10b981',
+                        danger: '#ef4444', 
+                        warning: '#f59e0b'
+                    },
+                    backgroundImage: {
+                        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+                        'gradient-conic': 'conic-gradient(var(--tw-gradient-stops))'
+                    }
+                }
+            }
+        }
     </script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1a1a2e 50%, #16213e 100%);
+            background-attachment: fixed;
+        }
+        .nav-active { @apply bg-gradient-to-r from-primary/20 to-primary/5 text-primary border-b-2 border-primary; }
+        .card-hover { @apply hover:shadow-lg hover:shadow-primary/10 transition-all duration-200; }
+        .btn-primary-gradient { @apply bg-gradient-to-r from-primary to-blue-600 hover:from-blue-600 hover:to-primary shadow-lg shadow-primary/30; }
+        .btn-success-gradient { @apply bg-gradient-to-r from-success to-emerald-600 hover:from-emerald-600 hover:to-success shadow-lg shadow-success/30; }
+        .stat-card { @apply bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur border border-gray-700/50; }
+    </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen">
-    <nav class="bg-gray-800 border-b border-gray-700">
+<body class="text-gray-100 min-h-screen">
+    <nav class="sticky top-0 z-50 bg-gray-900/80 backdrop-blur border-b border-gray-700/50">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center space-x-8">
-                    <a href="/" class="text-xl font-bold text-primary">GMGN Daily</a>
-                    <div class="flex space-x-4">
-                        <a href="/" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/' %}bg-gray-700{% endif %}">盈利总览</a>
-                        <a href="/wallets" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path.startswith('/wallet') or request.url.path.startswith('/profit') %}bg-gray-700{% endif %}">地址管理</a>
-                        <a href="/config" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700 {% if request.url.path == '/config' %}bg-gray-700{% endif %}">配置</a>
+                    <a href="/" class="text-2xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">GMGN Daily</a>
+                    <div class="hidden md:flex space-x-1">
+                        <a href="/" class="px-3 py-2 rounded-lg text-sm font-medium transition {% if request.url.path == '/' %}nav-active{% else %}hover:bg-gray-800/50{% endif %}">📊 总览</a>
+                        <a href="/wallets" class="px-3 py-2 rounded-lg text-sm font-medium transition {% if request.url.path.startswith('/wallet') or request.url.path.startswith('/profit') %}nav-active{% else %}hover:bg-gray-800/50{% endif %}">📋 管理</a>
+                        <a href="/config" class="px-3 py-2 rounded-lg text-sm font-medium transition {% if request.url.path == '/config' %}nav-active{% else %}hover:bg-gray-800/50{% endif %}">⚙️ 配置</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
                     {% if authed %}
-                    <span class="text-xs text-success">已登录</span>
-                    <a href="/logout" class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:border-gray-500">退出</a>
+                    <span class="text-xs px-2 py-1 rounded-full bg-success/20 text-success border border-success/30">✓ 已登录</span>
+                    <a href="/logout" class="text-xs px-3 py-1.5 rounded-lg border border-gray-700 hover:bg-gray-800 hover:border-gray-600 transition">退出</a>
                     {% else %}
-                    <a href="/login" class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:border-gray-500">登录</a>
+                    <a href="/login" class="text-xs px-3 py-1.5 rounded-lg border border-primary hover:bg-primary/10 text-primary transition">登录</a>
                     {% endif %}
                 </div>
             </div>
         </div>
     </nav>
-    <main class="max-w-7xl mx-auto px-4 py-6">
+    <main class="max-w-7xl mx-auto px-4 py-8">
         {% block content %}{% endblock %}
     </main>
-    <footer class="bg-gray-800 border-t border-gray-700 mt-8">
-        <div class="max-w-7xl mx-auto px-4 py-4">
-            <div class="text-center text-sm text-gray-500">
-                GMGN Daily · debot sol 钱包日盈利爬虫
-            </div>
-        </div>
+    <footer class="border-t border-gray-700/50 mt-12 py-6 text-center text-sm text-gray-500">
+        <div class="max-w-7xl mx-auto">GMGN Daily · Solana 钱包日盈利监控系统</div>
     </footer>
     {% block scripts %}{% endblock %}
 </body>
