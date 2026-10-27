@@ -66,22 +66,26 @@ def _to_float(v: Any) -> float:
 
 
 def normalize(item: Dict[str, Any]) -> Dict[str, Any]:
-    """把接口返回的一条日记录转成规整的 dict."""
+    """把接口返回的一条日记录转成规整的 dict（GMGN 格式到内部格式的映射）.
+    
+    GMGN 返回字段映射到内部字段:
+      total_profit      -> realized_profit
+      total_buys        -> buy_count
+      total_sells       -> sell_count
+      buy_amount_usd    -> buy_volume
+      sell_amount_usd   -> sell_volume
+      (win/loss_profit) -> gains/losses
+    """
     return {
         "date": int(item.get("date", 0)),
-        "total_profit": _to_float(item.get("total_profit")),
-        "total_buys": int(item.get("total_buys", 0) or 0),
-        "total_sells": int(item.get("total_sells", 0) or 0),
-        "total_transfer_ins": int(item.get("total_transfer_ins", 0) or 0),
-        "total_transfer_outs": int(item.get("total_transfer_outs", 0) or 0),
-        "buy_amount_usd": _to_float(item.get("buy_amount_usd")),
-        "sell_amount_usd": _to_float(item.get("sell_amount_usd")),
-        "transfer_in_amount_usd": _to_float(item.get("transfer_in_amount_usd")),
-        "transfer_out_amount_usd": _to_float(item.get("transfer_out_amount_usd")),
-        "win_sells": int(item.get("win_sells", 0) or 0),
-        "loss_sells": int(item.get("loss_sells", 0) or 0),
-        "win_profit": _to_float(item.get("win_profit")),
-        "loss_profit": _to_float(item.get("loss_profit")),
+        "buy_count": int(item.get("total_buys", 0) or 0),
+        "sell_count": int(item.get("total_sells", 0) or 0),
+        "buy_volume": _to_float(item.get("buy_amount_usd")),
+        "sell_volume": _to_float(item.get("sell_amount_usd")),
+        "realized_profit": _to_float(item.get("total_profit")),
+        "gains": _to_float(item.get("win_profit")),
+        "losses": _to_float(item.get("loss_profit")),
+        "last_trade_time": 0,  # GMGN 无此字段，用 0
     }
 
 

@@ -52,6 +52,18 @@ class Database:
                     updated_at TEXT NOT NULL
                 )
             """)
+            # Track which source was used for each record (for debugging/audit)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS daily_profit_source (
+                    wallet TEXT NOT NULL,
+                    date INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'debot',
+                    synced_at TEXT NOT NULL,
+                    PRIMARY KEY (wallet, date),
+                    FOREIGN KEY (wallet, date) REFERENCES daily_profit(wallet, date)
+                        ON DELETE CASCADE
+                )
+            """)
             # One row per wallet per calendar day. Column names mirror
             # docs/debot.md calendar items 1:1.
             c.execute("""
@@ -155,8 +167,12 @@ class Database:
 
     # ============ daily_profit ============
 
-    def upsert_days(self, wallet: str, days: List[Dict[str, Any]]) -> int:
-        """Upsert calendar days for a wallet. Returns rows written."""
+    def upsert_days(self, wallet: str, days: List[Dict[str, Any]],
+                    source: str = "debot") -> int:
+        """Upsert calendar days for a wallet. Returns rows written.
+        
+        source: which data source this came from (debot/gmgn)
+        """
         now = _now_iso()
         n = 0
         with self._conn() as conn:
@@ -180,6 +196,14 @@ class Database:
                 """, (wallet, d["date"], d["buy_count"], d["sell_count"],
                       d["buy_volume"], d["sell_volume"], d["realized_profit"],
                       d["gains"], d["losses"], d["last_trade_time"], now))
+                
+                # Track which source this record came from
+                conn.execute("""
+                    INSERT INTO daily_profit_source (wallet, date, source, synced_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(wallet, date) DO UPDATE SET
+                        source=excluded.source, synced_at=excluded.synced_at
+                """, (wallet, d["date"], source, now))
                 n += 1
         return n
 

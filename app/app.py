@@ -27,6 +27,7 @@ import uvicorn
 
 from database import get_db
 from debot_client import DebotClient, DebotError
+from profit_source import ProfitSourceManager, SourceType
 
 logging.basicConfig(stream=sys.stderr,
                     format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
@@ -121,6 +122,23 @@ def _client() -> DebotClient:
     return DebotClient(session_id=sid, chain=CHAIN)
 
 
+def _source_manager() -> ProfitSourceManager:
+    """Get configured source manager with current settings."""
+    db = get_db()
+    debot_sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
+    default_source = str(db.get_config("profit_source", "gmgn"))
+    enable_gmgn = bool(db.get_config("enable_gmgn", True))
+    enable_debot = bool(db.get_config("enable_debot", True))
+    
+    return ProfitSourceManager(
+        debot_session_id=debot_sid,
+        default_source=default_source,  # type: ignore
+        enable_gmgn=enable_gmgn,
+        enable_debot=enable_debot,
+        chain=CHAIN
+    )
+
+
 def _target_months(n_back: int = SYNC_MONTHS_BACK) -> List[str]:
     """Current month + n_back previous months, 'YYYY-MM' format."""
     now = datetime.now(timezone.utc)
@@ -143,23 +161,28 @@ _sync_task: Optional[asyncio.Task] = None
 def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
     """Blocking sync of one wallet over given months. Returns summary."""
     db = get_db()
-    client = _client()
+    sources_mgr = _source_manager()
     total_days = 0
     per_month = []
+    
     for month in months:
         try:
-            days = client.fetch_calendar(wallet, month)
-            n = db.upsert_days(wallet, days)
+            days, source = sources_mgr.fetch_month(wallet, month, fallback=True)
+            n = db.upsert_days(wallet, days, source=source)
             pnl = sum(d["realized_profit"] for d in days)
-            db.add_sync_log(wallet, month, len(days), pnl, "ok", "")
+            db.add_sync_log(wallet, month, len(days), pnl, "ok", 
+                           f"source={source}")
             total_days += n
-            per_month.append({"month": month, "days": len(days), "pnl": pnl})
-        except DebotError as e:
-            db.add_sync_log(wallet, month, 0, 0.0, "error",
-                            f"code={e.code} {e.message}")
-            per_month.append({"month": month, "error": f"code={e.code}"})
-            if e.code == 101:
-                raise  # session expired: stop immediately
+            per_month.append({"month": month, "days": len(days), "pnl": pnl,
+                            "source": source})
+        except Exception as e:
+            err_msg = str(e)
+            if hasattr(e, 'code'):
+                err_msg = f"code={e.code} {getattr(e, 'message', str(e))}"
+            db.add_sync_log(wallet, month, 0, 0.0, "error", err_msg)
+            per_month.append({"month": month, "error": err_msg})
+            log.warning("[SYNC] %s/%s failed: %s", wallet[:8], month, err_msg)
+    
     return {"wallet": wallet, "total_days": total_days, "months": per_month}
 
 
@@ -206,9 +229,9 @@ async def _sync_loop():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     db = get_db()
-    wallets = db.list_wallets()
+    wallets = [dict(w) for w in db.list_wallets()]
     month = request.query_params.get("month") or _target_months(0)[0]
-    summaries = db.get_all_summaries(month)
+    summaries = [dict(s) for s in db.get_all_summaries(month)]
     by_addr = {str(w["address"]): w for w in wallets}
     rows = [{**s, "label": by_addr.get(s["wallet"], {}).get("label", ""),
              "enabled": by_addr.get(s["wallet"], {}).get("enabled", 0)}
@@ -233,9 +256,9 @@ async def wallets_page(request: Request):
         "request": request,
         "title": "地址管理",
         "authed": is_authed(request),
-        "wallets": db.list_wallets(),
+        "wallets": [dict(w) for w in db.list_wallets()],
         "sync_state": _sync_state,
-        "log": db.get_sync_log(30),
+        "log": [dict(l) for l in db.get_sync_log(30)],
     }
     return templates.TemplateResponse("wallets.html", context)
 
@@ -244,8 +267,8 @@ async def wallets_page(request: Request):
 async def wallet_detail(request: Request, address: str):
     db = get_db()
     month = request.query_params.get("month") or _target_months(0)[0]
-    days = db.get_daily(address, month)
-    summary = db.get_month_summary(address, month)
+    days = [dict(d) for d in db.get_daily(address, month)]
+    summary = dict(db.get_month_summary(address, month)) if db.get_month_summary(address, month) else {}
     wallets = {str(w["address"]): w for w in db.list_wallets()}
     context = {
         "request": request,
@@ -266,8 +289,8 @@ async def profit_page(request: Request, address: str):
     """Standalone public profit page for one address (shareable, no login)."""
     db = get_db()
     month = request.query_params.get("month") or _target_months(0)[0]
-    days = db.get_daily(address, month)
-    summary = db.get_month_summary(address, month)
+    days = [dict(d) for d in db.get_daily(address, month)]
+    summary = dict(db.get_month_summary(address, month)) if db.get_month_summary(address, month) else {}
     wallets = {str(w["address"]): w for w in db.list_wallets()}
     win_days = sum(1 for d in days if d["realized_profit"] >= 0)
     loss_days = len(days) - win_days
