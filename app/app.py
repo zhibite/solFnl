@@ -104,6 +104,18 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+def _make_json_safe(obj: Any) -> Any:
+    """Convert objects to JSON-safe types for Jinja2 rendering."""
+    if isinstance(obj, dict):
+        return {str(k): _make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_json_safe(item) for item in obj]
+    elif obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    else:
+        return str(obj)
+
+
 def _ts_to_date(ts: int) -> str:
     try:
         return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d")
@@ -232,34 +244,39 @@ async def home(request: Request):
     wallets = [dict(w) for w in db.list_wallets()]
     month = request.query_params.get("month") or _target_months(0)[0]
     summaries = [dict(s) for s in db.get_all_summaries(month)]
-    by_addr = {str(w["address"]): w for w in wallets}
-    rows = [{**s, "label": by_addr.get(s["wallet"], {}).get("label", ""),
-             "enabled": by_addr.get(s["wallet"], {}).get("enabled", 0)}
-            for s in summaries]
-    total = sum(r["realized_profit"] for r in rows)
-    context = {
+    by_addr = {str(w["address"]): dict(w) for w in wallets}
+    rows = []
+    for s in summaries:
+        row_dict = dict(s)
+        wallet_info = by_addr.get(row_dict.get("wallet", ""), {})
+        row_dict["label"] = wallet_info.get("label", "")
+        row_dict["enabled"] = wallet_info.get("enabled", 0)
+        rows.append(row_dict)
+    total = sum(float(r.get("realized_profit", 0)) for r in rows)
+    months = _target_months(6)
+    context = _make_json_safe({
         "request": request,
         "title": "地址盈利总览",
         "authed": is_authed(request),
         "rows": rows,
-        "month": month,
-        "total": total,
-        "months": _target_months(6),
-    }
+        "month": str(month),
+        "total": float(total),
+        "months": months,
+    })
     return templates.TemplateResponse("index.html", context)
 
 
 @app.get("/wallets", response_class=HTMLResponse)
 async def wallets_page(request: Request):
     db = get_db()
-    context = {
+    context = _make_json_safe({
         "request": request,
         "title": "地址管理",
         "authed": is_authed(request),
         "wallets": [dict(w) for w in db.list_wallets()],
         "sync_state": _sync_state,
         "log": [dict(l) for l in db.get_sync_log(30)],
-    }
+    })
     return templates.TemplateResponse("wallets.html", context)
 
 
@@ -270,7 +287,7 @@ async def wallet_detail(request: Request, address: str):
     days = [dict(d) for d in db.get_daily(address, month)]
     summary = dict(db.get_month_summary(address, month)) if db.get_month_summary(address, month) else {}
     wallets = {str(w["address"]): w for w in db.list_wallets()}
-    context = {
+    context = _make_json_safe({
         "request": request,
         "title": f"地址 {address[:8]}…",
         "authed": is_authed(request),
@@ -280,7 +297,7 @@ async def wallet_detail(request: Request, address: str):
         "summary": summary,
         "month": month,
         "months": _target_months(6),
-    }
+    })
     return templates.TemplateResponse("detail.html", context)
 
 
@@ -304,7 +321,7 @@ async def profit_page(request: Request, address: str):
     else:
         best_day = {"pnl": 0.0, "date": "-"}
         worst_day = {"pnl": 0.0, "date": "-"}
-    context = {
+    context = _make_json_safe({
         "request": request,
         "title": f"盈利 {address[:8]}…",
         "authed": is_authed(request),
@@ -320,7 +337,7 @@ async def profit_page(request: Request, address: str):
         "worst_day": worst_day,
         "chart_dates": [_ts_to_date(d["date"]) for d in days],
         "chart_pnls": [d["realized_profit"] for d in days],
-    }
+    })
     return templates.TemplateResponse("profit.html", context)
 
 
@@ -329,14 +346,14 @@ async def config_page(request: Request):
     db = get_db()
     sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
     masked = (sid[:6] + "…" + sid[-4:]) if sid else "(未配置)"
-    context = {
+    context = _make_json_safe({
         "request": request,
         "title": "配置",
         "session_masked": masked,
         "has_session": bool(sid),
         "interval": SYNC_INTERVAL_MIN,
         "months_back": SYNC_MONTHS_BACK,
-    }
+    })
     return templates.TemplateResponse("config.html", context)
 
 
@@ -344,11 +361,11 @@ async def config_page(request: Request):
 async def login_page(request: Request, next: str = "/"):
     if is_authed(request):
         return RedirectResponse(url=next or "/", status_code=302)
-    context = {
+    context = _make_json_safe({
         "request": request,
         "error": request.query_params.get("error"),
         "next": next or "/",
-    }
+    })
     return templates.TemplateResponse("login.html", context)
 
 
@@ -360,11 +377,11 @@ async def login_submit(request: Request, username: str = Form(...),
         target = next if next.startswith("/") and not next.startswith("//") else "/"
         log.info("[AUTH] login ok user=%s", username)
         return RedirectResponse(url=target, status_code=302)
-    context = {
+    context = _make_json_safe({
         "request": request,
         "error": "用户名或密码错误",
         "next": next or "/",
-    }
+    })
     return templates.TemplateResponse("login.html", context)
 
 
