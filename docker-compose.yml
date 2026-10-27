@@ -3,15 +3,15 @@ version: '3.8'
 services:
   gmgndaily:
     build: .
-    restart: always
-    ports:
-      - "8038:8038"
+    restart: unless-stopped
     volumes:
       - gmgndaily_data:/data
-    environment:
-      - DATABASE_PATH=/data/gmgndaily.db
     env_file:
       - .env
+    environment:
+      - DATABASE_PATH=/data/gmgndaily.db
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8038/api/health"]
       interval: 30s

@@ -7,13 +7,21 @@
 > （已验证 `3.252.79.139` 可通）。接口需要登录态：浏览器登录 debot 后，
 > 把 Cookie 里 `beegosessionID` 的值填到配置里。
 
+## 在线访问
+
+**生产部署**：https://fnl.bquant.com （通过 Coolify）
+
 ## 快速启动（docker）
 
 ```bash
-cp .env.example .env        # 填 DEBOT_SESSION_ID / GMGN_PASSWORD
+cp .env.docker .env         # 填 DEBOT_SESSION_ID / GMGN_PASSWORD
 docker compose up -d --build
 # 打开 http://服务器IP:8038 ，用户名 zengsw 登录
 ```
+
+## Coolify 部署
+
+详见 [DEPLOY.md](./DEPLOY.md) — 包含 fnl.bquant.com 部署配置说明。
 
 ## 本地开发
 
