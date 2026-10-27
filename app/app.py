@@ -255,7 +255,6 @@ async def home(request: Request):
     total = sum(float(r.get("realized_profit", 0)) for r in rows)
     months = _target_months(6)
     context = _make_json_safe({
-        "request": request,
         "title": "地址盈利总览",
         "authed": is_authed(request),
         "rows": rows,
@@ -263,21 +262,22 @@ async def home(request: Request):
         "total": float(total),
         "months": months,
     })
-    return templates.TemplateResponse("index.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "index.html", context)
 
 
 @app.get("/wallets", response_class=HTMLResponse)
 async def wallets_page(request: Request):
     db = get_db()
     context = _make_json_safe({
-        "request": request,
         "title": "地址管理",
         "authed": is_authed(request),
         "wallets": [dict(w) for w in db.list_wallets()],
         "sync_state": _sync_state,
         "log": [dict(l) for l in db.get_sync_log(30)],
     })
-    return templates.TemplateResponse("wallets.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "wallets.html", context)
 
 
 @app.get("/wallet/{address}", response_class=HTMLResponse)
@@ -288,7 +288,6 @@ async def wallet_detail(request: Request, address: str):
     summary = dict(db.get_month_summary(address, month)) if db.get_month_summary(address, month) else {}
     wallets = {str(w["address"]): w for w in db.list_wallets()}
     context = _make_json_safe({
-        "request": request,
         "title": f"地址 {address[:8]}…",
         "authed": is_authed(request),
         "address": address,
@@ -298,7 +297,8 @@ async def wallet_detail(request: Request, address: str):
         "month": month,
         "months": _target_months(6),
     })
-    return templates.TemplateResponse("detail.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "detail.html", context)
 
 
 @app.get("/profit/{address}", response_class=HTMLResponse)
@@ -322,7 +322,6 @@ async def profit_page(request: Request, address: str):
         best_day = {"pnl": 0.0, "date": "-"}
         worst_day = {"pnl": 0.0, "date": "-"}
     context = _make_json_safe({
-        "request": request,
         "title": f"盈利 {address[:8]}…",
         "authed": is_authed(request),
         "address": address,
@@ -338,7 +337,8 @@ async def profit_page(request: Request, address: str):
         "chart_dates": [_ts_to_date(d["date"]) for d in days],
         "chart_pnls": [d["realized_profit"] for d in days],
     })
-    return templates.TemplateResponse("profit.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "profit.html", context)
 
 
 @app.get("/config", response_class=HTMLResponse, dependencies=[Depends(require_login)])
@@ -347,14 +347,14 @@ async def config_page(request: Request):
     sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
     masked = (sid[:6] + "…" + sid[-4:]) if sid else "(未配置)"
     context = _make_json_safe({
-        "request": request,
         "title": "配置",
         "session_masked": masked,
         "has_session": bool(sid),
         "interval": SYNC_INTERVAL_MIN,
         "months_back": SYNC_MONTHS_BACK,
     })
-    return templates.TemplateResponse("config.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "config.html", context)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -362,11 +362,11 @@ async def login_page(request: Request, next: str = "/"):
     if is_authed(request):
         return RedirectResponse(url=next or "/", status_code=302)
     context = _make_json_safe({
-        "request": request,
         "error": request.query_params.get("error"),
         "next": next or "/",
     })
-    return templates.TemplateResponse("login.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "login.html", context)
 
 
 @app.post("/login")
@@ -378,11 +378,11 @@ async def login_submit(request: Request, username: str = Form(...),
         log.info("[AUTH] login ok user=%s", username)
         return RedirectResponse(url=target, status_code=302)
     context = _make_json_safe({
-        "request": request,
         "error": "用户名或密码错误",
         "next": next or "/",
     })
-    return templates.TemplateResponse("login.html", context)
+    context["request"] = request
+    return templates.TemplateResponse(request, "login.html", context)
 
 
 @app.get("/logout")
