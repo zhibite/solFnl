@@ -454,6 +454,60 @@ async def api_set_session(request: Request):
     return {"success": True, "saved": True, "valid": ok}
 
 
+@app.get("/api/config/sources")
+async def api_get_sources(request: Request):
+    """Get current profit source configuration."""
+    db = get_db()
+    return {
+        "success": True,
+        "default_source": str(db.get_config("profit_source", "gmgn")),
+        "enable_gmgn": bool(db.get_config("enable_gmgn", True)),
+        "enable_debot": bool(db.get_config("enable_debot", True)),
+    }
+
+
+@app.post("/api/config/sources", dependencies=[Depends(require_login)])
+async def api_set_sources(request: Request):
+    """Configure profit data sources."""
+    body = await request.json()
+    db = get_db()
+    
+    default_source = str(body.get("default_source", "gmgn")).lower()
+    if default_source not in ("gmgn", "debot"):
+        return {"success": False, "message": "invalid default_source"}
+    
+    enable_gmgn = bool(body.get("enable_gmgn", True))
+    enable_debot = bool(body.get("enable_debot", True))
+    
+    if not enable_gmgn and not enable_debot:
+        return {"success": False, 
+                "message": "at least one data source must be enabled"}
+    
+    # Validate debot if it's enabled
+    if enable_debot:
+        sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
+        if not sid:
+            return {"success": False,
+                    "message": "debot enabled but DEBOT_SESSION_ID not configured"}
+        try:
+            mgr = ProfitSourceManager(debot_session_id=sid, chain=CHAIN)
+            if not mgr._debot or not mgr._debot.check_available():
+                return {"success": False,
+                        "message": "debot session invalid"}
+        except Exception as e:
+            return {"success": False,
+                    "message": f"debot check failed: {e}"}
+    
+    db.set_config("profit_source", default_source)
+    db.set_config("enable_gmgn", enable_gmgn)
+    db.set_config("enable_debot", enable_debot)
+    
+    log.info("[CONFIG] sources updated: default=%s gmgn=%s debot=%s",
+             default_source, enable_gmgn, enable_debot)
+    
+    return {"success": True}
+
+
 @app.get("/api/sync/status")
 async def api_sync_status():
     db = get_db()

@@ -1,9 +1,40 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="text-xl font-bold mb-4">配置</h1>
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-xl">
+
+<!-- 数据源配置 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-xl mb-6">
+    <h2 class="text-lg font-semibold mb-4">📊 数据源配置</h2>
+    
     <div class="mb-4">
-        <div class="text-sm text-gray-400 mb-1">debot 登录态（beegosessionID）</div>
+        <label class="block text-sm text-gray-300 mb-2">默认数据源</label>
+        <select id="defaultSource" class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+            <option value="gmgn">GMGN（推荐，无需认证）</option>
+            <option value="debot">Debot（需要登录）</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1">GMGN 无需认证可用，Debot 需要有效登录态。首选失败时会自动切换到备用源</p>
+    </div>
+
+    <div class="mb-4 space-y-2">
+        <label class="flex items-center gap-2 cursor-pointer">
+            <input id="enableGMGN" type="checkbox" class="rounded">
+            <span class="text-sm text-gray-300">启用 GMGN 数据源</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+            <input id="enableDebot" type="checkbox" class="rounded">
+            <span class="text-sm text-gray-300">启用 Debot 数据源</span>
+        </label>
+    </div>
+
+    <button onclick="saveSourceConfig()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded text-sm">保存数据源配置</button>
+    <p id="sourceMsg" class="text-xs mt-2 text-gray-400"></p>
+</div>
+
+<!-- Debot 认证配置 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-xl mb-6">
+    <h2 class="text-lg font-semibold mb-4">🔑 Debot 认证</h2>
+    <div class="mb-4">
+        <div class="text-sm text-gray-400 mb-1">登录态（beegosessionID）</div>
         <div class="font-mono text-sm">当前：{{ session_masked }}</div>
         <p class="text-xs text-gray-500 mt-1">过期后去 debot.ai 重新登录，把 Cookie 里 beegosessionID 的值粘进来保存</p>
     </div>
@@ -13,7 +44,12 @@
         <button onclick="saveSession()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded text-sm">保存并验证</button>
     </div>
     <p id="sidMsg" class="text-xs mt-2 text-gray-400"></p>
-    <div class="mt-6 text-sm text-gray-400 space-y-1">
+</div>
+
+<!-- 系统配置 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 max-w-xl">
+    <h2 class="text-lg font-semibold mb-4">⚙️ 系统配置</h2>
+    <div class="space-y-2 text-sm text-gray-400">
         <div>同步间隔：{{ interval }} 分钟（环境变量 SYNC_INTERVAL_MIN）</div>
         <div>同步月份：当月 + 往前 {{ months_back }} 个月（环境变量 SYNC_MONTHS_BACK）</div>
     </div>
@@ -21,6 +57,47 @@
 {% endblock %}
 {% block scripts %}
 <script>
+async function loadSourceConfig() {
+    const res = await fetch('/api/config/sources', {method: 'GET'});
+    const r = await res.json();
+    if (r.success) {
+        document.getElementById('defaultSource').value = r.default_source || 'gmgn';
+        document.getElementById('enableGMGN').checked = r.enable_gmgn !== false;
+        document.getElementById('enableDebot').checked = r.enable_debot !== false;
+    }
+}
+
+async function saveSourceConfig() {
+    const msg = document.getElementById('sourceMsg');
+    const defaultSource = document.getElementById('defaultSource').value;
+    const enableGMGN = document.getElementById('enableGMGN').checked;
+    const enableDebot = document.getElementById('enableDebot').checked;
+    
+    if (!enableGMGN && !enableDebot) {
+        msg.textContent = '至少需要启用一个数据源';
+        msg.className = 'text-xs mt-2 text-danger';
+        return;
+    }
+    
+    const res = await fetch('/api/config/sources', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            default_source: defaultSource,
+            enable_gmgn: enableGMGN,
+            enable_debot: enableDebot
+        })
+    });
+    const r = await res.json();
+    if (r.success) {
+        msg.textContent = '已保存 ✓';
+        msg.className = 'text-xs mt-2 text-success';
+    } else {
+        msg.textContent = '失败：' + r.message;
+        msg.className = 'text-xs mt-2 text-danger';
+    }
+}
+
 async function saveSession() {
     const msg = document.getElementById('sidMsg');
     const sid = document.getElementById('sidInput').value.trim();
@@ -35,5 +112,8 @@ async function saveSession() {
         if (r.valid) setTimeout(() => location.reload(), 800);
     } else { msg.textContent = '失败：' + r.message; msg.className = 'text-xs mt-2 text-danger'; }
 }
+
+// 页面加载时读取配置
+document.addEventListener('DOMContentLoaded', loadSourceConfig);
 </script>
 {% endblock %}
