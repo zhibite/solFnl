@@ -5,7 +5,8 @@ services:
     build: .
     restart: unless-stopped
     volumes:
-      - gmgndaily_data:/data
+      # Coolify: 在 Storage 选项卡中挂载 /gmgndaily/data 到容器 /data
+      - /gmgndaily/data:/data
     env_file:
       - .env
     environment:
@@ -17,7 +18,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-volumes:
-  gmgndaily_data:
-    driver: local
