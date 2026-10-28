@@ -2,7 +2,7 @@
 
 Tables:
   wallets            - tracked sol addresses (address PK, label, enabled)
-  daily_profit       - one row per (wallet, date); mirrors docs/debot.md items
+  daily_profit       - one row per (wallet, date); mirrors the GMGN daily item
   daily_profit_source- which upstream each (wallet, date) came from
   sync_log           - history of sync runs per (wallet, month), pruned by age
   sync_state         - latest durable sync status per (wallet, month)
@@ -115,16 +115,21 @@ class Database:
                         ON DELETE CASCADE
                 )
             """)
-            # One row per wallet per calendar day. Column names mirror
-            # docs/debot.md calendar items 1:1.
+            # One row per wallet per calendar day. Every field returned by the
+            # GMGN daily_profits API has a column here; see
+            # gmgn_client.normalize() for the field-by-field mapping.
             c.execute("""
                 CREATE TABLE IF NOT EXISTS daily_profit (
                     wallet TEXT NOT NULL,
                     date INTEGER NOT NULL,
                     buy_count INTEGER NOT NULL DEFAULT 0,
                     sell_count INTEGER NOT NULL DEFAULT 0,
+                    transfer_in_count INTEGER NOT NULL DEFAULT 0,
+                    transfer_out_count INTEGER NOT NULL DEFAULT 0,
                     buy_volume REAL NOT NULL DEFAULT 0,
                     sell_volume REAL NOT NULL DEFAULT 0,
+                    transfer_in_amount_usd REAL NOT NULL DEFAULT 0,
+                    transfer_out_amount_usd REAL NOT NULL DEFAULT 0,
                     realized_profit REAL NOT NULL DEFAULT 0,
                     gains REAL NOT NULL DEFAULT 0,
                     losses REAL NOT NULL DEFAULT 0,
@@ -184,15 +189,21 @@ class Database:
                       "ON sync_log (wallet, created_at)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_sync_created "
                       "ON sync_log (created_at)")
-            # ---- 轻量迁移: 老库没有 win_sells/loss_sells 列时补上 ----
+            # ---- 轻量迁移: 老库缺列时自动补上 ----
             cols = {r["name"] for r in conn.execute(
                 "PRAGMA table_info(daily_profit)").fetchall()}
-            if "win_sells" not in cols:
-                conn.execute("ALTER TABLE daily_profit ADD COLUMN "
-                             "win_sells INTEGER NOT NULL DEFAULT 0")
-            if "loss_sells" not in cols:
-                conn.execute("ALTER TABLE daily_profit ADD COLUMN "
-                             "loss_sells INTEGER NOT NULL DEFAULT 0")
+            new_columns = {
+                "win_sells": "INTEGER NOT NULL DEFAULT 0",
+                "loss_sells": "INTEGER NOT NULL DEFAULT 0",
+                "transfer_in_count": "INTEGER NOT NULL DEFAULT 0",
+                "transfer_out_count": "INTEGER NOT NULL DEFAULT 0",
+                "transfer_in_amount_usd": "REAL NOT NULL DEFAULT 0",
+                "transfer_out_amount_usd": "REAL NOT NULL DEFAULT 0",
+            }
+            for name, decl in new_columns.items():
+                if name not in cols:
+                    conn.execute(
+                        f"ALTER TABLE daily_profit ADD COLUMN {name} {decl}")
 
     # ============ wallets ============
 
@@ -302,65 +313,52 @@ class Database:
     # ============ daily_profit ============
 
     def upsert_days(self, wallet: str, days: List[Dict[str, Any]],
-                    source: str = "debot") -> int:
+                    source: str = "gmgn") -> int:
         """Upsert calendar days for a wallet. Returns rows written.
 
-        source: which data source this came from (debot/gmgn).
-        Debot has no win/loss sell counts, so a debot sync never overwrites
-        win_sells/loss_sells that were previously written by GMGN.
+        Writes every field GMGN returns. `source` is kept for audit; GMGN is
+        the only active source (debot is temporarily disabled).
         """
         now = _now_iso()
         n = 0
-        # GMGN provides win/loss counts; debot does not (0 would erase them).
-        update_win = source != "debot"
         with self._conn() as conn:
             for d in days:
-                if update_win:
-                    conn.execute("""
-                        INSERT INTO daily_profit
-                            (wallet, date, buy_count, sell_count, buy_volume,
-                             sell_volume, realized_profit, gains, losses,
-                             win_sells, loss_sells,
-                             last_trade_time, synced_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(wallet, date) DO UPDATE SET
-                            buy_count=excluded.buy_count,
-                            sell_count=excluded.sell_count,
-                            buy_volume=excluded.buy_volume,
-                            sell_volume=excluded.sell_volume,
-                            realized_profit=excluded.realized_profit,
-                            gains=excluded.gains,
-                            losses=excluded.losses,
-                            win_sells=excluded.win_sells,
-                            loss_sells=excluded.loss_sells,
-                            last_trade_time=excluded.last_trade_time,
-                            synced_at=excluded.synced_at
-                    """, (wallet, d["date"], d["buy_count"], d["sell_count"],
-                          d["buy_volume"], d["sell_volume"], d["realized_profit"],
-                          d["gains"], d["losses"],
-                          int(d.get("win_sells", 0) or 0),
-                          int(d.get("loss_sells", 0) or 0),
-                          d["last_trade_time"], now))
-                else:
-                    conn.execute("""
-                        INSERT INTO daily_profit
-                            (wallet, date, buy_count, sell_count, buy_volume,
-                             sell_volume, realized_profit, gains, losses,
-                             last_trade_time, synced_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(wallet, date) DO UPDATE SET
-                            buy_count=excluded.buy_count,
-                            sell_count=excluded.sell_count,
-                            buy_volume=excluded.buy_volume,
-                            sell_volume=excluded.sell_volume,
-                            realized_profit=excluded.realized_profit,
-                            gains=excluded.gains,
-                            losses=excluded.losses,
-                            last_trade_time=excluded.last_trade_time,
-                            synced_at=excluded.synced_at
-                    """, (wallet, d["date"], d["buy_count"], d["sell_count"],
-                          d["buy_volume"], d["sell_volume"], d["realized_profit"],
-                          d["gains"], d["losses"], d["last_trade_time"], now))
+                conn.execute("""
+                    INSERT INTO daily_profit
+                        (wallet, date, buy_count, sell_count,
+                         transfer_in_count, transfer_out_count,
+                         buy_volume, sell_volume,
+                         transfer_in_amount_usd, transfer_out_amount_usd,
+                         realized_profit, gains, losses,
+                         win_sells, loss_sells,
+                         last_trade_time, synced_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(wallet, date) DO UPDATE SET
+                        buy_count=excluded.buy_count,
+                        sell_count=excluded.sell_count,
+                        transfer_in_count=excluded.transfer_in_count,
+                        transfer_out_count=excluded.transfer_out_count,
+                        buy_volume=excluded.buy_volume,
+                        sell_volume=excluded.sell_volume,
+                        transfer_in_amount_usd=excluded.transfer_in_amount_usd,
+                        transfer_out_amount_usd=excluded.transfer_out_amount_usd,
+                        realized_profit=excluded.realized_profit,
+                        gains=excluded.gains,
+                        losses=excluded.losses,
+                        win_sells=excluded.win_sells,
+                        loss_sells=excluded.loss_sells,
+                        last_trade_time=excluded.last_trade_time,
+                        synced_at=excluded.synced_at
+                """, (wallet, d["date"], d["buy_count"], d["sell_count"],
+                      int(d.get("transfer_in_count", 0) or 0),
+                      int(d.get("transfer_out_count", 0) or 0),
+                      d["buy_volume"], d["sell_volume"],
+                      float(d.get("transfer_in_amount_usd", 0.0) or 0),
+                      float(d.get("transfer_out_amount_usd", 0.0) or 0),
+                      d["realized_profit"], d["gains"], d["losses"],
+                      int(d.get("win_sells", 0) or 0),
+                      int(d.get("loss_sells", 0) or 0),
+                      d["last_trade_time"], now))
 
                 # Track which source this record came from
                 conn.execute("""
@@ -469,13 +467,24 @@ class Database:
                        COALESCE(SUM(d.losses), 0) AS losses,
                        COALESCE(SUM(d.buy_count), 0) AS buy_count,
                        COALESCE(SUM(d.sell_count), 0) AS sell_count,
+                       COALESCE(SUM(d.buy_volume), 0) AS buy_volume,
+                       COALESCE(SUM(d.sell_volume), 0) AS sell_volume,
+                       COALESCE(SUM(d.transfer_in_count), 0) AS transfer_in_count,
+                       COALESCE(SUM(d.transfer_out_count), 0) AS transfer_out_count,
+                       COALESCE(SUM(d.transfer_in_amount_usd), 0) AS transfer_in_amount_usd,
+                       COALESCE(SUM(d.transfer_out_amount_usd), 0) AS transfer_out_amount_usd,
                        {win_select},
                        COALESCE((
                            SELECT SUM(d7.realized_profit) FROM daily_profit d7
                            WHERE d7.wallet = w.address AND d7.date >= ?
                        ), 0) AS pnl_7d,
-                       (SELECT MAX(d8.synced_at) FROM daily_profit d8
-                        WHERE d8.wallet = w.address) AS updated_at
+                       COALESCE((
+                           SELECT MAX(s.updated_at) FROM sync_state s
+                           WHERE s.wallet = w.address
+                       ), (
+                           SELECT MAX(d8.synced_at) FROM daily_profit d8
+                           WHERE d8.wallet = w.address
+                       )) AS updated_at
                 FROM wallets w
                 LEFT JOIN daily_profit d
                   ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
@@ -494,7 +503,7 @@ class Database:
 
     def get_wallets_page(self, limit: int,
                          offset: int) -> List[Dict[str, Any]]:
-        """地址管理列表: 基础信息 + 近7天盈利 + 月内胜率 + 最近更新时间."""
+        """地址管理列表: 基础信息 + 累计/近7天盈利 + 胜率 + 最近同步时间."""
         cutoff_7d = _recent_cutoff(7)
         with self._conn() as conn:
             rows = conn.execute("""
@@ -506,6 +515,14 @@ class Database:
                            WHERE d7.wallet = w.address AND d7.date >= ?
                        ), 0) AS pnl_7d,
                        COALESCE((
+                           SELECT SUM(d10.realized_profit) FROM daily_profit d10
+                           WHERE d10.wallet = w.address
+                       ), 0) AS total_pnl,
+                       COALESCE((
+                           SELECT COUNT(*) FROM daily_profit d11
+                           WHERE d11.wallet = w.address
+                       ), 0) AS active_days,
+                       COALESCE((
                            SELECT SUM(d8.win_sells) FROM daily_profit d8
                            WHERE d8.wallet = w.address
                        ), 0) AS win_sells,
@@ -513,8 +530,13 @@ class Database:
                            SELECT SUM(d8.loss_sells) FROM daily_profit d8
                            WHERE d8.wallet = w.address
                        ), 0) AS loss_sells,
-                       (SELECT MAX(d9.synced_at) FROM daily_profit d9
-                        WHERE d9.wallet = w.address) AS last_synced_at
+                       COALESCE((
+                           SELECT MAX(s.updated_at) FROM sync_state s
+                           WHERE s.wallet = w.address
+                       ), (
+                           SELECT MAX(d9.synced_at) FROM daily_profit d9
+                           WHERE d9.wallet = w.address
+                       )) AS last_synced_at
                 FROM wallets w
                 ORDER BY w.created_at
                 LIMIT ? OFFSET ?

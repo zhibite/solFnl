@@ -1,11 +1,11 @@
-# gmgndaily — debot sol 钱包日盈利爬虫
+# gmgndaily — GMGN Solana 钱包日盈利监控
 
-定时抓取 [debot.ai](https://debot.ai) 钱包日历接口（`GET /api/dashboard/wallet/calendar`），
-把每个 sol 地址的**每日盈利**存进 SQLite，前端可看、可导入地址，对外提供 HTTP API。
+定时抓取 [GMGN](https://gmgn.ai) 的 `daily_profits` 接口（`POST /pf/api/v1/wallets/sol/daily_profits`），
+把每个 sol 地址的**每日买卖、转账、胜负单、已实现盈亏**存进 SQLite，前端可看、可导入地址，
+对外提供 HTTP API。
 
-> 网络要求：debot 按 IP 地理位置封锁大陆出口，**必须跑在海外机器上**
-> （已验证 `3.252.79.139` 可通）。接口需要登录态：浏览器登录 debot 后，
-> 把 Cookie 里 `beegosessionID` 的值填到配置里。
+> 数据源：当前**只启用 GMGN**（Debot 源暂时停用）。服务器需要能访问 `gmgn.ai`。
+> 接口无需登录，但必须用 POST，且 chain 必须是 `sol`。
 
 ## 在线访问
 
@@ -14,7 +14,7 @@
 ## 快速启动（docker）
 
 ```bash
-cp .env.docker .env         # 必填 GMGN_PASSWORD / SESSION_SECRET，按需填 DEBOT_SESSION_ID
+cp .env.docker .env         # 必填 GMGN_PASSWORD / SESSION_SECRET
 docker compose up -d --build
 # 打开 http://服务器IP:8038 ，用户名 zengsw + 上面设置的密码登录
 ```
@@ -33,8 +33,7 @@ Coolify 上把变量配在应用环境变量里即可；数据库卷持久化说
 ```bash
 cd app
 pip install -r requirements.txt
-set DATABASE_PATH=./data.db & set DEBOT_SESSION_ID=你的beegosessionID
-set GMGN_PASSWORD=你的控制台密码
+set DATABASE_PATH=./data.db & set GMGN_PASSWORD=你的控制台密码
 python app.py               # http://127.0.0.1:8038
 
 # 可选：回到仓库根目录跑一次全链路自检（临时库，不碰生产数据）
@@ -49,8 +48,7 @@ python app/verify_flow.py
    `/profit/<地址>` 是公开分享页，不需要登录）。
 2. `/wallets` 页粘贴 JSON 或上传文件导入地址：
    `[{"address":"...","label":"聪明钱01"}]`，点“立即同步”。
-3. `beegosessionID` 过期后去 `/config` 页粘贴新的（或改 `.env` 重启）。
-4. 后台队列会自动同步当月 + 往前 N 个月：最近一次同步超过 `SYNC_INTERVAL_MIN`
+3. 后台队列会自动同步当月 + 往前 N 个月：最近一次同步超过 `SYNC_INTERVAL_MIN`
    分钟的地址才会重新入队，每 `SYNC_TICK_SECONDS` 秒处理 `SYNC_BATCH_SIZE` 个。
 
 ## 对外 API（无需登录，直接调）
@@ -59,7 +57,7 @@ python app/verify_flow.py
 （本地自测时为 `http://127.0.0.1:8038`，端口由 `PORT` 决定，默认 8038。）
 这一组接口全部开放，**不需要登录、不要带 Cookie 或 token**。
 
-### 三态返回合约（查询单地址时）
+### 状态返回合约（查询单地址时）
 
 调用 `GET /api/profit/<address>` 时，外部系统会得到以下状态之一（HTTP 均为 200，用 `status` 字段区分）：
 
@@ -70,7 +68,7 @@ python app/verify_flow.py
 | `not_found` | 地址未在跟踪列表中 | `action` 字段明确指示调用 POST /api/track | 按 `action` 调用 POST /api/track 登记地址 |
 | `invalid_address` | 地址格式非法 | 错误说明 | 检查地址格式（32-44 个 base58 字符） |
 
-**关键提示**：判断分支时务必用 `status` 字段而非只看 `success`，确保正确处理三种场景。
+**关键提示**：判断分支时务必用 `status` 字段而非只看 `success`，确保正确处理四种状态。
 
 ### 通用约定
 
@@ -86,7 +84,7 @@ python app/verify_flow.py
 | POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
 | GET | `/api/wallets` | 列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功 | 无 |
 | GET | `/api/profit?month=2026-09` | 所有**已启用**地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 `total_pnl`。不传 month 则取当月 | query: `month` (可选, YYYY-MM) |
-| GET | `/api/profit/<address>?month=2026-09` | 单个地址的每日明细，`days[]` 按天给买入卖出笔数与金额、已实现盈亏，外加 `summary` 汇总。不传 month 则取最近 500 天 | path: `<address>` · query: `month` (可选) |
+| GET | `/api/profit/<address>?month=2026-09` | 单个地址的每日明细，`days[]` 按天给买入/卖出、转入/转出的笔数与金额、胜负单数和已实现盈亏，外加 `summary` 汇总。不传 month 则取最近 500 天 | path: `<address>` · query: `month` (可选) |
 | GET | `/profit/<address>?month=2026-09` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
 | GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
 
@@ -127,15 +125,17 @@ curl https://fnl.bquant.com/api/health
 - `GET /api/profit` → `{"success": true, "month": "2026-10", "total_pnl": 1234.5, "wallets": [...]}`
 - `GET /api/profit/<address>` → `{"success": true, "wallet": "...", "month": "2026-10", "summary": {...}, "days": [...]}`
 
-单地址的 `days[]` 每个元素字段与 `docs/debot.md` 抓包 1:1 对应
-（`date, buy_count, sell_count, buy_volume, sell_volume, realized_profit, gains, losses, last_trade_time`）。
+单地址的 `days[]` 每个元素按 GMGN 每日记录存储，字段为：
+`wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`
+（字段与 GMGN 原始字段的对应关系见 [gmgn_client.py](app/gmgn_client.py) 的 `normalize()`；
+`date` 为 UTC 秒级时间戳，GMGN 源没有 `last_trade_time`，该字段固定为 0）。
 
 ### 常见错误（success 为 false，看 message）
 
 - `address required` — body 里没有 `address` 或值为空。
 - `invalid solana address` — 地址不是合法的 Solana 地址（长度或字符集不对）。
 - `body must be JSON` — 没带 `Content-Type: application/json`，或 body 不是合法 JSON。
-- `months must be a list of YYYY-MM strings` — `months` 传了空数组、不是数组，或元素不是合法月份。
+- `months must be a list of YYYY-MM strings` — `months` 不是数组，或元素不是合法月份（省略或传 `[]` 时按默认月份处理）。
 - `wallet saved but sync failed: ...` — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 `/api/track` 或等定时任务重试。
 
 **怎么选**：只想批量加地址选 `/api/wallets`（瞬间返回）；想加完马上拿到数据选 `/api/track`（会等待抓取完成）。拿到数据后用 `/api/profit` 系列读结果。
@@ -145,21 +145,22 @@ curl https://fnl.bquant.com/api/health
 ```
 app/
   app.py            # FastAPI：页面 + 导入 + 同步队列 + 对外 API
-  debot_client.py   # debot 日历接口客户端（带 beegosessionID Cookie）
-  gmgn_client.py    # GMGN daily_profits 客户端
-  profit_source.py  # GMGN/Debot 双源适配 + fallback
+  gmgn_client.py    # GMGN daily_profits 客户端（当前唯一数据源）
+  profit_source.py  # 数据源适配层（Debot 部分暂时停用）
+  debot_client.py   # Debot 客户端（暂时停用，留作后续恢复）
   database.py       # SQLite：wallets / daily_profit / sync_log / sync_state / config
   validators.py     # Solana 地址、YYYY-MM 校验
   templates/        # base, index, wallets, detail, profit, config, login
   static/style.css
-docs/debot.md       # 接口抓包样本（字段字典）
+docs/gmgn-daily.md  # GMGN 接口实测说明
+docs/debot.md       # Debot 抓包样本（历史参考）
 ```
 
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `DEBOT_SESSION_ID` | 空 | beegosessionID（也可存 DB，经 `/config` 页写入） |
+| `DEBOT_SESSION_ID` | 空 | 暂未使用（Debot 源已暂停，保留给后续恢复） |
 | `GMGN_PASSWORD` | 空 → 启动时随机生成 | 控制台密码；生产环境必须设置（compose 会强制要求） |
 | `SESSION_SECRET` | 空 → 每次启动随机 | 会话签名密钥；不设则重启后登录态失效、多 worker 互不认 |
 | `SYNC_INTERVAL_MIN` | `60` | 一个地址的最近同步超过这么多分钟才会再次入队 |
@@ -169,4 +170,4 @@ docs/debot.md       # 接口抓包样本（字段字典）
 | `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
 | `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
 | `DATABASE_PATH` | `/data/gmgndaily.db` | SQLite 路径 |
-| `CHAIN` | `solana` | debot chain 参数 |
+| `CHAIN` | `solana` | 链参数；GMGN 客户端会自动把 `solana` 转成 `sol` |

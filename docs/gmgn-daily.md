@@ -1,35 +1,81 @@
-# GMGN daily_profits 接口（实测确认）
+# GMGN daily_profits 接口（当前实际使用）
 
-> 2026-10-27 在 `3.252.79.139` 上实测。结论：**这个接口可用，但原始抓包文档里的 URL 是错的。**
+> 最后更新：2026-10-28。线上**固定使用 GMGN**，Debot 数据源已暂停。
+> 本文以 `app/gmgn_client.py` 的实际实现为准。
 
-## 一、原始抓包文档的问题
+## 一、我们实际调用的接口
 
-`docs/gmgn-daily.md` 里记的 URL 是：
-
-```
-https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits?device_id=...&tab_id=...
-```
-
-用这个 URL 发 **GET**，无论加不加公共 query 参数、不管钱包地址放 path 还是 query，
-**一律返回 `404 page not found`**。之前 `gmgndata/_probe_daily3.py` 穷举了 144 条
-候选路径全部落空，结论是「该接口已废弃」——这个结论是错的，错在**方法用错了**。
-
-## 二、真实接口形态
+只有一个：
 
 ```http
-POST https://gmgn.ai/pf/api/v1/wallets/{chain}/daily_profits
+POST https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 Content-Type: application/json
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
+Accept: application/json, text/plain, */*
 Referer: https://gmgn.ai/
-Origin: https://gmgn.ai/
+Origin: https://gmgn.ai
 
 {
   "wallet_addresses": ["215nhcAHjQQGgwpQSJQ7zR26etbjjtVdW74NLzwEgQjP"],
-  "start_at": 1785542400,
-  "end_at":   1790812800
+  "start_at": 1788220800,
+  "end_at":   1790812799
 }
 ```
 
-响应：
+curl 等价写法：
+
+```bash
+curl -X POST 'https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits' \
+  -H 'Content-Type: application/json' \
+  -H 'Referer: https://gmgn.ai/' \
+  -H 'Origin: https://gmgn.ai' \
+  -d '{"wallet_addresses":["215nhcAHjQQGgwpQSJQ7zR26etbjjtVdW74NLzwEgQjP"],"start_at":1788220800,"end_at":1790812799}'
+```
+
+调用链：
+
+```
+app.py  sync_one_wallet()
+  └─ profit_source.GMGNSource.fetch_month(wallet, "YYYY-MM")
+       └─ gmgn_client.GMGNDailyClient.fetch_daily(wallet, start_at, end_at)
+            └─ POST /pf/api/v1/wallets/sol/daily_profits
+```
+
+要点：
+
+- **不带 Cookie、token 或任何 query 参数**。
+- `chain` 固定用 `sol`；客户端会把配置里的 `solana` 自动归一化成 `sol`。
+- **一次只查一个钱包**。`wallet_addresses` 传多个地址时，服务端会把盈亏求和合并成一份，
+  响应里也不带地址标识，无法拆分。
+- `start_at` 必填，`end_at` 可选（省略则取到今天）。
+- 时间跨度必须 **小于 1 年**，否则返回 `40000301 time range must be less than 1 year`。
+- 当前月把 `end_at` 设为未来月末（如 10-31 23:59:59）实测正常，服务端会截到当天。
+
+## 二、浏览器抓到的 URL 和实际请求的关系
+
+从浏览器 DevTools 复制出来的 URL 通常长这样：
+
+```
+https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
+  ?device_id=...&tab_id=...&fp_did=...&client_id=...
+  &from_app=gmgn&app_ver=...&tz_name=Asia_Shanghai&tz_offset=28800
+  &app_lang=zh-CN&os=web&worker=0
+```
+
+但要注意：
+
+| 现象 | 实测结果 |
+|---|---|
+| 用这个 URL 发 GET（带浏览器头） | `404 page not found` |
+| 用这个 URL 发 GET（不带浏览器头） | Cloudflare `403` 拦截页 |
+| 用同样的路径发 POST + JSON body | `200`，`code: 0` |
+| 带上/不带上面那串 query 参数 POST | 返回内容完全相同（实测响应 md5 一致） |
+| 钱包地址在哪里 | 不在 URL 里，在 POST body 的 `wallet_addresses` |
+
+结论：浏览器抓包时复制的只是 URL，**实际请求是 POST，钱包地址在 body 里**；
+那串 `device_id / fp_did / tz_name ...` 都是可选的前端标识，我们的客户端不发送。
+
+## 三、响应与字段字典
 
 ```json
 {
@@ -37,103 +83,105 @@ Origin: https://gmgn.ai/
   "reason": "",
   "message": "success",
   "data": {
-    "list": [ { "date": 1785542400, "total_profit": "1973.60...", ... } ]
+    "list": [
+      {
+        "date": 1790812800,
+        "total_profit": "27686.01876755388696498647",
+        "total_buys": 3192,
+        "total_sells": 3186,
+        "total_transfer_ins": 516,
+        "total_transfer_outs": 0,
+        "buy_amount_usd": "878707.88955879398290654682",
+        "sell_amount_usd": "908563.35947402332295534482",
+        "transfer_in_amount_usd": "31915.25194852506356579778",
+        "transfer_out_amount_usd": "0",
+        "win_sells": 1601,
+        "loss_sells": 1585,
+        "win_profit": "82295.95320490874054763786",
+        "loss_profit": "-54609.93443735485358265139"
+      }
+    ]
   }
 }
 ```
 
-路径里的 chain 用 `sol`（`solana` 会报 `chain not supported`）。
+字段全部入库，映射关系（见 `gmgn_client.normalize()`）：
 
-### 关键行为
+| GMGN 字段 | 含义 | 入库列 |
+|---|---|---|
+| `date` | unix 秒，UTC 零点 | `daily_profit.date` |
+| `total_profit` | 当日已实现盈亏（字符串） | `realized_profit` |
+| `total_buys` / `total_sells` | 买入 / 卖出笔数 | `buy_count` / `sell_count` |
+| `total_transfer_ins` / `total_transfer_outs` | 转入 / 转出笔数 | `transfer_in_count` / `transfer_out_count` |
+| `buy_amount_usd` / `sell_amount_usd` | 买入 / 卖出金额（USD） | `buy_volume` / `sell_volume` |
+| `transfer_in_amount_usd` / `transfer_out_amount_usd` | 转入 / 转出金额（USD） | `transfer_in_amount_usd` / `transfer_out_amount_usd` |
+| `win_sells` / `loss_sells` | 盈利单数 / 亏损单数 | `win_sells` / `loss_sells` |
+| `win_profit` / `loss_profit` | 盈利合计 / 亏损合计（`loss_profit` 为负） | `gains` / `losses` |
+
+补充说明：
+
+- `date` 是 **UTC 零点**，不是 Asia/Shanghai 零点；数据库按月查询也统一按 UTC 边界。
+- 金额字段原样是字符串，入库时转成 SQLite `REAL`；展示到美分足够，若要做精确对账需要保留原始字符串。
+- 响应里没有钱包地址字段，所以必须一个钱包一个请求。
+- `daily_profit` 表里还有一列 `last_trade_time`（Debot 遗留），GMGN 源固定写 `0`。
+
+## 四、实测行为与边界
 
 | 行为 | 实测结果 |
 |---|---|
-| 方法 | **POST**。GET 永远 404 |
-| 鉴权 | **不需要**。不带 token、不带公共 query 参数都能拿到 `code=0` |
-| 公共 query（`device_id` / `client_id` / `tab_id` …） | **非必需**，可省略 |
-| `start_at` | **必填** |
-| `end_at` | 可选，省略则取到今天 |
-| 时间跨度 | 必须 **< 1 年**，否则 `40000301 time range must be less than 1 year` |
-| 多钱包 | **会求和合并**！`wallet_addresses` 传多个地址，服务端把盈亏相加后返回一份，响应里也不带地址标识 → **必须逐个钱包查** |
-| 不存在的地址 | 不报错，返回该日期区间的空壳记录（`total_profit=0`） |
+| 方法 | **POST**；GET 不是可用接口（404 / 403） |
+| 鉴权 | **不需要**；无 token、Cookie、公共 query 均可 |
+| 公共 query | 非必需，可省略 |
+| `start_at` | 必填 |
+| `end_at` | 可选；省略取到今天 |
+| 时间跨度 | 必须 < 1 年 |
+| 多钱包 | **求和合并**，必须逐个钱包查 |
+| 不存在的地址 | 不报错，返回该区间的空壳记录（`total_profit=0`） |
+| 未来 `end_at` | 当前月传月末 23:59:59 正常，服务端截到当天 |
+| 当日数据 | 盘中会持续变化；线上同步时间不同，当日数值可能和直查不同 |
+| 失败响应 | 非 0 `code` 或 HTTP 错误由 `gmgn_client.GMGNError` 抛出 |
 
-### 字段字典
+2026-10-28 在 `3.252.79.139` 上再次验证：
 
-| 字段 | 含义 |
-|---|---|
-| `date` | unix 秒，UTC 零点 |
-| `total_profit` | 当日已实现盈亏（字符串，需转 float） |
-| `total_buys` / `total_sells` | 买入 / 卖出笔数 |
-| `total_transfer_ins` / `total_transfer_outs` | 转入 / 转出笔数 |
-| `buy_amount_usd` / `sell_amount_usd` | 买入 / 卖出金额（USD） |
-| `transfer_in_amount_usd` / `transfer_out_amount_usd` | 转入 / 转出金额（USD） |
-| `win_sells` / `loss_sells` | 盈利单数 / 亏损单数 |
-| `win_profit` / `loss_profit` | 盈利合计 / 亏损合计（`loss_profit` 为负数） |
+- 用抓包钱包 `Ar2Y6o1QmrRAskjii1cRfijeKugHH13ycxW5cd7rro1x` 请求 2026-10，
+  首日 `27686.01876755388696498647`、`3192` 买 / `3186` 卖、`1601` 盈利单 / `1585` 亏损单，
+  与浏览器抓包**逐字段完全一致**。
+- 2026-09 请求返回 30 天；2026-10 请求返回 28 天（截至当天）。
+- 线上该地址 10 月合计与 GMGN 直查只差当天：线上最后一次同步为 `2,369.92`，
+  GMGN 当前值为 `4,021.50`，说明接口数据是实时变化的，不是历史数据错误。
 
-## 三、与 debot 的关系
+## 五、与 Debot 的差异（历史参考）
 
-同一钱包（`215nhcAHjQQGgwpQSJQ7zR26etbjjtVdW74NLzwEgQjP`）2026-09 逐日对比：
+Debot 数据源目前已暂停，以下对比仅作为历史口径参考。同一钱包 2026-09 的对比：
 
-- **口径基本一致**：月度合计 debot `144165.22` vs GMGN `141132.30`，差异 `-2.10%`
-- 逐日走势高度吻合，但每天有几十到几千美元的小差异（买卖笔数也不同，如 09-06 debot 16/9 vs GMGN 12/9）→ 两家对「卖出笔」的判定和成本法处理不同
-- GMGN 独有 `transfer_in/out`（转入转出）字段，debot 没有
+- 月度合计：Debot `144,165.22`，GMGN `141,132.30`，差异约 `-2.10%`。
+- 逐日走势高度吻合，但每天有几十到几千美元的差异（买卖笔数判定、成本法处理不同）。
+- GMGN 独有 `transfer_in/out`（转入转出）字段，Debot 没有。
+- GMGN 不需要登录态，不存在 Cookie 过期问题；限制是时间跨度 < 1 年、必须逐钱包查询。
 
-**GMGN 这个接口可以替代 debot 作为数据源**，而且不需要登录态、不怕 cookie 过期。
-唯一限制是**时间跨度 < 1 年**，且**必须逐个钱包查**。
+`debot_client.py` 和 `profit_source.py` 里的 Debot 代码保留，但 `_source_manager()`
+固定 `enable_debot=False`，同步不会再走 Debot。
 
-## 四、怎么找到的
+## 六、代码与工具
 
-前端 bundle `/_app-*.js` 里直接写了请求函数：
+- 客户端实现：`app/gmgn_client.py`
+  - `GMGNDailyClient.fetch_daily(wallet, start_at, end_at)`
+  - `GMGNDailyClient.fetch_daily_many(wallets, start_at, end_at)`（内部串行逐个查）
+  - `normalize(item)`：GMGN 字段 → 内部字段
+- 月份适配：`app/profit_source.py` 的 `GMGNSource.fetch_month(wallet, "YYYY-MM")`
+- 同步入口：`app/app.py` 的 `sync_one_wallet()`
+- 探测脚本（历史，非生产）：`tools/probe_gmgn_daily.py` ~ `tools/probe_gmgn_daily8.py`
+- 冒烟/验证脚本：`tools/test_gmgn_client.py`、`tools/verify_server_clients.py`
 
-```js
-S = g => post({url:"/pf/api/v1/wallets/hybrid/daily_profits", authType:Access, data:g})
-C = (g,b,y) => {
-  if (isString(g)) {
-    let _ = {wallet_addresses:b.wallet_addresses, start_at:b.start_at, end_at:b.end_at};
-    return post({url:`/pf/api/v1/wallets/${g}/daily_profits`, authType: y?Access:None, data:_})
-  } else {
-    let _ = {chain:g, wallet_addresses:b.wallet_addresses,
-             started_at:b.started_at, ended_at:b.ended_at, limit:b.limit||100};
-    return post({url:"/api/v1/wallets/daily_performance/stats", authType:y?Access:None, data:_})
-  }
-}
-```
-
-三个候选路径里：
-
-- `/pf/api/v1/wallets/{chain}/daily_profits` — **可用**（`authType` 可为 `None`）
-- `/pf/api/v1/wallets/hybrid/daily_profits` — 需要 token（`40101611 empty token`）
-- `/api/v1/wallets/daily_performance/stats` — 返回 `code=0` 但 `data` 为空，拿不到数据
-
-## 五、代码
-
-客户端：`app/gmgn_client.py`（本地）、`~/gmgndata/src/gmgn_daily_client.py`（服务器）
-
-```python
-from gmgn_client import GMGNDailyClient
-
-c = GMGNDailyClient()                       # chain 默认 "sol"
-days = c.fetch_daily(addr, start_ts, end_ts)          # 单个钱包
-days_map = c.fetch_daily_many([a, b], start, end)     # 内部逐个查
-```
-
-服务器上另有一个等价版本 `~/gmgndata/src/gmgn_daily_client.py`，
-与排行榜客户端 `~/gmgndata/src/gmgn_client.py` 并存互不影响。
-
-## 六、探测脚本
-
-`~/gmgndata/probe/` 下是完整的探测过程（8 轮，每轮都有 `.out` 记录）：
+## 七、探测历史（简）
 
 | 脚本 | 结论 |
 |---|---|
 | `probe_gmgn_daily.py` | GET 各种地址传法 → 全 404 |
-| `probe_gmgn_daily2.py` | 路径枚举 + 抓 bundle 找接口常量 |
-| `probe_gmgn_daily3b.py` | hybrid 路径实测 → 404 |
-| `probe_gmgn_daily4.py` | 提取 bundle 里 `daily_profits` 上下文 → 发现是 POST |
-| `probe_gmgn_daily5.py` | POST 实测 → 打通 `/pf/api/v1/wallets/sol/daily_profits` |
-| `probe_gmgn_daily6.py` | 完整验证 + 参数边界 + 鉴权确认 |
-| `probe_gmgn_daily7.py` | 多钱包合并行为 + 与 debot 对比 |
+| `probe_gmgn_daily2.py` | 路径枚举 + 抓前端 bundle 找接口常量 |
+| `probe_gmgn_daily3b.py` | hybrid 路径实测 → 404 / 需要 token |
+| `probe_gmgn_daily4.py` | 从 bundle 发现是 POST |
+| `probe_gmgn_daily5.py` | POST 实测打通 `/pf/api/v1/wallets/sol/daily_profits` |
+| `probe_gmgn_daily6.py` | 参数边界 + 鉴权确认 |
+| `probe_gmgn_daily7.py` | 多钱包合并行为 + 与 Debot 对比 |
 | `probe_gmgn_daily8.py` | 求和合并确证 + 接口一致性 |
-
-冒烟测试：`~/gmgndata/test_gmgn_client.py`（`ALL_OK`）
-双客户端验证：`~/gmgndata/verify_server_clients.py`（`BOTH_OK`）

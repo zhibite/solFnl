@@ -36,6 +36,31 @@ n = db.upsert_days(wallet, days)
 print("upserted:", n)
 print("summary:", db.get_month_summary(wallet, "2026-09"))
 
+# 2b. GMGN-shaped day (all fields, incl. transfers) through normalize()
+from gmgn_client import normalize  # noqa: E402
+
+gmgn_wallet = "Ar2Y6o1QmrRAskjii1cRfijeKugHH13ycxW5cd7rro1x"
+gmgn_day = normalize({
+    "date": 1790812800,
+    "total_profit": "27686.01876755388696498647",
+    "total_buys": 3192,
+    "total_sells": 3186,
+    "total_transfer_ins": 516,
+    "total_transfer_outs": 0,
+    "buy_amount_usd": "878707.88955879398290654682",
+    "sell_amount_usd": "908563.35947402332295534482",
+    "transfer_in_amount_usd": "31915.25194852506356579778",
+    "transfer_out_amount_usd": "0",
+    "win_sells": 1601,
+    "loss_sells": 1585,
+    "win_profit": "82295.95320490874054763786",
+    "loss_profit": "-54609.93443735485358265139",
+})
+db.upsert_wallet(gmgn_wallet, label="gmgn-sample")
+db.upsert_days(gmgn_wallet, [gmgn_day], source="gmgn")
+print("gmgn sample seeded, transfer_in_amount_usd:",
+      gmgn_day["transfer_in_amount_usd"])
+
 
 async def main():
     # 3. pages + public APIs (httpx ASGITransport; TestClient breaks on
@@ -58,9 +83,24 @@ async def main():
               "days=", len(r["days"]),
               "month-pnl=", round(r["summary"]["realized_profit"], 2))
 
+        r = (await c.get(f"/api/profit/{gmgn_wallet}?month=2026-10")).json()
+        d0 = r["days"][0]
+        assert d0["transfer_in_count"] == 516
+        assert abs(d0["transfer_in_amount_usd"] - 31915.2519485) < 1e-4
+        print("api gmgn day: transfer_in_count=", d0["transfer_in_count"],
+              "transfer_in_amount_usd=", round(d0["transfer_in_amount_usd"], 2))
+
         r = (await c.get("/api/profit?month=2026-09")).json()
         print("api all: success=", r["success"],
               "total=", round(r["total_pnl"], 2))
+
+        r = (await c.get("/api/profit?month=2026-10")).json()
+        row = next(w for w in r["wallets"] if w["wallet"] == gmgn_wallet)
+        assert row["transfer_in_count"] == 516
+        assert row["buy_volume"] > 0
+        print("api list aggregates: transfer_in_count=",
+              row["transfer_in_count"],
+              "buy_volume=", round(row["buy_volume"], 2))
 
         # 4. sanity: unknown page params must not 500
         print("bad page:", (await c.get("/?page=abc")).status_code)

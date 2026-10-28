@@ -22,6 +22,8 @@
   transfer_in_amount_usd / transfer_out_amount_usd
   win_sells / loss_sells              盈利单数 / 亏损单数
   win_profit / loss_profit            盈利合计 / 亏损合计 (loss 为负)
+
+以上字段全部入库；内部列名映射见 normalize()。
 """
 
 import json
@@ -78,21 +80,31 @@ def _to_int(v: Any) -> int:
 def normalize(item: Dict[str, Any]) -> Dict[str, Any]:
     """把接口返回的一条日记录转成规整的 dict（GMGN 格式到内部格式的映射）.
     
-    GMGN 返回字段映射到内部字段:
-      total_profit      -> realized_profit
-      total_buys        -> buy_count
-      total_sells       -> sell_count
-      buy_amount_usd    -> buy_volume
-      sell_amount_usd   -> sell_volume
-      (win/loss_profit) -> gains/losses
+    GMGN 返回字段映射到内部字段（GMGN 是当前唯一启用的数据源）:
+      total_profit            -> realized_profit
+      total_buys              -> buy_count
+      total_sells             -> sell_count
+      total_transfer_ins      -> transfer_in_count
+      total_transfer_outs     -> transfer_out_count
+      buy_amount_usd          -> buy_volume
+      sell_amount_usd         -> sell_volume
+      transfer_in_amount_usd  -> transfer_in_amount_usd
+      transfer_out_amount_usd -> transfer_out_amount_usd
+      (win/loss_profit)       -> gains/losses
       win_sells / loss_sells 原样保留 (胜率 = win_sells / (win_sells+loss_sells))
     """
     return {
         "date": int(item.get("date", 0)),
         "buy_count": _to_int(item.get("total_buys")),
         "sell_count": _to_int(item.get("total_sells")),
+        "transfer_in_count": _to_int(item.get("total_transfer_ins")),
+        "transfer_out_count": _to_int(item.get("total_transfer_outs")),
         "buy_volume": _to_float(item.get("buy_amount_usd")),
         "sell_volume": _to_float(item.get("sell_amount_usd")),
+        "transfer_in_amount_usd": _to_float(
+            item.get("transfer_in_amount_usd")),
+        "transfer_out_amount_usd": _to_float(
+            item.get("transfer_out_amount_usd")),
         "realized_profit": _to_float(item.get("total_profit")),
         "gains": _to_float(item.get("win_profit")),
         "losses": _to_float(item.get("loss_profit")),

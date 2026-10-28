@@ -1,8 +1,8 @@
 """gmgndaily - debot sol wallet daily PnL crawler + web console.
 
 Run:  cd app && python app.py   (or: uvicorn app:app --port 8038)
-Env:  DEBOT_SESSION_ID (beegosessionID cookie, required for debot sync)
-      DATABASE_PATH (default /data/gmgndaily.db)
+Data source: GMGN only (debot is temporarily disabled).
+Env:  DATABASE_PATH (default /data/gmgndaily.db)
       GMGN_PASSWORD (web console login; required in production)
       SESSION_SECRET (cookie signing key; set for stable sessions)
       SYNC_INTERVAL_MIN (default 60), SYNC_MONTHS_BACK (default 2)
@@ -30,7 +30,6 @@ from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from database import get_db
-from debot_client import DebotClient
 from profit_source import ProfitSourceManager
 from validators import is_valid_month, is_valid_sol_address
 
@@ -40,7 +39,6 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO,
 log = logging.getLogger("gmgndaily")
 
 # ============ config ============
-SESSION_ID = os.getenv("DEBOT_SESSION_ID", "")
 SYNC_INTERVAL_MIN = int(os.getenv("SYNC_INTERVAL_MIN", "60"))
 SYNC_MONTHS_BACK = int(os.getenv("SYNC_MONTHS_BACK", "2"))
 SYNC_TICK_SECONDS = max(int(os.getenv("SYNC_TICK_SECONDS", "60")), 5)
@@ -162,35 +160,23 @@ def _ts_to_date(ts: int) -> str:
         return str(ts)
 
 
+def _fmt_money(value: Any, digits: int = 2) -> str:
+    """1,234,567.89 style formatting for templates."""
+    try:
+        return f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 templates.env.filters["timestamp_to_date"] = _ts_to_date
-
-
-def _check_debot_session(sid: str) -> bool:
-    """Blocking debot session check (call via asyncio.to_thread)."""
-    return DebotClient(session_id=sid, chain=CHAIN).check_session()
-
-
-def _debot_available(sid: str) -> bool:
-    """Blocking availability check used by the config page (threaded)."""
-    mgr = ProfitSourceManager(debot_session_id=sid, chain=CHAIN)
-    return bool(mgr._debot and mgr._debot.check_available())
+templates.env.filters["money"] = lambda v: _fmt_money(v, 2)
+templates.env.filters["money0"] = lambda v: _fmt_money(v, 0)
 
 
 def _source_manager() -> ProfitSourceManager:
-    """Get configured source manager with current settings."""
-    db = get_db()
-    debot_sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
-    default_source = str(db.get_config("profit_source", "gmgn"))
-    enable_gmgn = bool(db.get_config("enable_gmgn", True))
-    enable_debot = bool(db.get_config("enable_debot", True))
-    
-    return ProfitSourceManager(
-        debot_session_id=debot_sid,
-        default_source=default_source,  # type: ignore
-        enable_gmgn=enable_gmgn,
-        enable_debot=enable_debot,
-        chain=CHAIN
-    )
+    """GMGN is the only active source (debot is temporarily disabled)."""
+    return ProfitSourceManager(default_source="gmgn", enable_gmgn=True,
+                               enable_debot=False, chain=CHAIN)
 
 
 def _target_months(n_back: int = SYNC_MONTHS_BACK) -> List[str]:
@@ -543,13 +529,8 @@ def profit_page(request: Request, address: str):
 @app.get("/config", response_class=HTMLResponse,
          dependencies=[Depends(require_login)])
 def config_page(request: Request):
-    db = get_db()
-    sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
-    masked = (sid[:6] + "…" + sid[-4:]) if sid else "(未配置)"
     context = _make_json_safe({
         "title": "配置",
-        "session_masked": masked,
-        "has_session": bool(sid),
         "interval": SYNC_INTERVAL_MIN,
         "months_back": SYNC_MONTHS_BACK,
         "batch_size": SYNC_BATCH_SIZE,
@@ -706,79 +687,16 @@ async def api_toggle_wallet(request: Request):
     return {"success": True}
 
 
-@app.post("/api/config/session", dependencies=[Depends(require_login)])
-async def api_set_session(request: Request):
-    """Save beegosessionID into DB (used when env var not set)."""
-    try:
-        body = _body_dict(await request.json())
-    except Exception:
-        return {"success": False, "message": "body must be JSON"}
-    sid = str(body.get("session_id", "")).strip()
-    if not sid:
-        return {"success": False, "message": "session_id empty"}
-    get_db().set_config("debot_session_id", sid)
-    # validate (blocking HTTP call -> worker thread)
-    try:
-        ok = await asyncio.to_thread(_check_debot_session, sid)
-    except Exception as e:
-        return {"success": True, "saved": True,
-                "valid": False, "message": f"saved but check failed: {e}"}
-    return {"success": True, "saved": True, "valid": ok}
-
-
 @app.get("/api/config/sources", dependencies=[Depends(require_login)])
 def api_get_sources():
-    """Get current profit source configuration."""
-    db = get_db()
+    """Report the fixed data-source configuration (GMGN only for now)."""
     return {
         "success": True,
-        "default_source": str(db.get_config("profit_source", "gmgn")),
-        "enable_gmgn": bool(db.get_config("enable_gmgn", True)),
-        "enable_debot": bool(db.get_config("enable_debot", True)),
+        "default_source": "gmgn",
+        "enable_gmgn": True,
+        "enable_debot": False,
+        "debot_available": False,
     }
-
-
-@app.post("/api/config/sources", dependencies=[Depends(require_login)])
-async def api_set_sources(request: Request):
-    """Configure profit data sources."""
-    try:
-        body = _body_dict(await request.json())
-    except Exception:
-        return {"success": False, "message": "body must be JSON"}
-    db = get_db()
-
-    default_source = str(body.get("default_source", "gmgn")).lower()
-    if default_source not in ("gmgn", "debot"):
-        return {"success": False, "message": "invalid default_source"}
-
-    enable_gmgn = bool(body.get("enable_gmgn", True))
-    enable_debot = bool(body.get("enable_debot", True))
-
-    if not enable_gmgn and not enable_debot:
-        return {"success": False,
-                "message": "at least one data source must be enabled"}
-
-    # Validate debot if it's enabled (network call -> worker thread)
-    if enable_debot:
-        sid = SESSION_ID or str(db.get_config("debot_session_id", "") or "")
-        if not sid:
-            return {"success": False,
-                    "message": "debot enabled but DEBOT_SESSION_ID not configured"}
-        try:
-            available = await asyncio.to_thread(_debot_available, sid)
-        except Exception as e:
-            return {"success": False,
-                    "message": f"debot check failed: {e}"}
-        if not available:
-            return {"success": False, "message": "debot session invalid"}
-
-    db.set_config("profit_source", default_source)
-    db.set_config("enable_gmgn", enable_gmgn)
-    db.set_config("enable_debot", enable_debot)
-
-    log.info("[CONFIG] sources updated: default=%s gmgn=%s debot=%s",
-             default_source, enable_gmgn, enable_debot)
-    return {"success": True}
 
 
 @app.get("/api/sync/status", dependencies=[Depends(require_login)])

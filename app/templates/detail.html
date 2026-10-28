@@ -69,6 +69,8 @@
                     <th class="px-6 py-3 text-right">亏损额</th>
                     <th class="px-6 py-3 text-right">买入量</th>
                     <th class="px-6 py-3 text-right">卖出量</th>
+                    <th class="px-6 py-3 text-right">转入</th>
+                    <th class="px-6 py-3 text-right">转出</th>
                     <th class="px-6 py-3 text-right">胜率</th>
                     <th class="px-6 py-3 text-right">买/卖笔数</th>
                 </tr>
@@ -83,12 +85,14 @@
                     <td class="px-6 py-3 text-right text-danger">{{ "%.2f"|format(d.losses) }}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ "%.2f"|format(d.buy_volume) }}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ "%.2f"|format(d.sell_volume) }}</td>
+                    <td class="px-6 py-3 text-right text-gray-300">{{ d.transfer_in_count }} 笔 / {{ "%.2f"|format(d.transfer_in_amount_usd) }}</td>
+                    <td class="px-6 py-3 text-right text-gray-300">{{ d.transfer_out_count }} 笔 / {{ "%.2f"|format(d.transfer_out_amount_usd) }}</td>
                     {% set _wr_total = (d.win_sells or 0) + (d.loss_sells or 0) %}
                     <td class="px-6 py-3 text-right text-gray-300">{% if _wr_total > 0 %}{{ "%.1f"|format((d.win_sells or 0) * 100.0 / _wr_total) }}%{% else %}-{% endif %}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ d.buy_count }}/{{ d.sell_count }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="8" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="10" class="px-6 py-12 text-center text-gray-500">
                     该月暂无数据，请先在 <a href="/wallets" class="text-primary hover:underline font-medium">地址管理</a> 点"立即同步"
                 </td></tr>
                 {% endfor %}

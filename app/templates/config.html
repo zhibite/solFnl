@@ -2,57 +2,17 @@
 {% block content %}
 <div class="mb-8">
     <h1 class="text-3xl font-bold">⚙️ 配置</h1>
-    <p class="text-gray-400 text-sm mt-1">管理数据源、认证信息和系统参数</p>
+    <p class="text-gray-400 text-sm mt-1">查看数据源和系统参数</p>
 </div>
 
-<!-- 数据源配置 -->
+<!-- 数据源 -->
 <div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover max-w-2xl mb-6">
-    <h2 class="text-lg font-semibold mb-5 flex items-center gap-2">📊 数据源配置</h2>
-    
-    <div class="mb-6">
-        <label class="block text-sm font-medium text-gray-300 mb-2">默认数据源</label>
-        <select id="defaultSource" class="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
-            <option value="gmgn">GMGN（推荐，无需认证）</option>
-            <option value="debot">Debot（需要登录）</option>
-        </select>
-        <p class="text-xs text-gray-400 mt-2">🔹 GMGN 无需认证可用，Debot 需要有效登录态。首选失败时会自动切换到备用源</p>
+    <h2 class="text-lg font-semibold mb-5 flex items-center gap-2">📊 数据源</h2>
+    <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30 text-sm text-gray-300">
+        <span>当前数据源</span>
+        <span class="font-mono font-medium text-primary">GMGN（固定）</span>
     </div>
-
-    <div class="mb-6 space-y-3">
-        <label class="flex items-center gap-3 cursor-pointer hover:bg-gray-700/20 p-2 rounded transition">
-            <input id="enableGMGN" type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-2 focus:ring-primary/50">
-            <span class="text-sm text-gray-300 font-medium">启用 GMGN 数据源</span>
-        </label>
-        <label class="flex items-center gap-3 cursor-pointer hover:bg-gray-700/20 p-2 rounded transition">
-            <input id="enableDebot" type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-2 focus:ring-primary/50">
-            <span class="text-sm text-gray-300 font-medium">启用 Debot 数据源</span>
-        </label>
-    </div>
-
-    <button onclick="saveSourceConfig()" class="btn-primary-gradient text-white px-6 py-2.5 rounded-lg text-sm font-medium transition">
-        ✓ 保存数据源配置
-    </button>
-    <p id="sourceMsg" class="text-xs mt-3 text-gray-400"></p>
-</div>
-
-<!-- Debot 认证配置 -->
-<div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover max-w-2xl mb-6">
-    <h2 class="text-lg font-semibold mb-5 flex items-center gap-2">🔑 Debot 认证</h2>
-    <div class="mb-6">
-        <label class="block text-sm font-medium text-gray-300 mb-2">当前登录态</label>
-        <div class="bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2.5 font-mono text-sm text-gray-200">
-            {{ session_masked }}
-        </div>
-        <p class="text-xs text-gray-400 mt-2">💡 过期后去 <a href="https://debot.ai" target="_blank" class="text-primary hover:underline">debot.ai</a> 重新登录，把 Cookie 里 beegosessionID 的值粘进来保存</p>
-    </div>
-    <div class="flex gap-3">
-        <input id="sidInput" type="password" placeholder="粘贴新的 beegosessionID"
-               class="flex-1 bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
-        <button onclick="saveSession()" class="btn-primary-gradient text-white px-6 py-2.5 rounded-lg text-sm font-medium transition">
-            ✓ 保存并验证
-        </button>
-    </div>
-    <p id="sidMsg" class="text-xs mt-3 text-gray-400"></p>
+    <p class="text-xs text-gray-400 mt-4">Debot 数据源已暂停，同步只使用 GMGN。GMGN 返回的买卖、转账、胜率字段都会入库。</p>
 </div>
 
 <!-- 系统配置 -->
@@ -128,7 +88,7 @@
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/profit/&lt;address&gt;</td>
-                    <td class="py-3 px-6 text-gray-300">单个地址的每日明细，<code class="font-mono text-xs">days[]</code> 按天给买入卖出笔数与金额、已实现盈亏，外加 <code class="font-mono text-xs">summary</code> 汇总。传 month 取该月，不传则取最近 500 天</td>
+                    <td class="py-3 px-6 text-gray-300">单个地址的每日明细，<code class="font-mono text-xs">days[]</code> 按天给买入/卖出、转入/转出的笔数与金额、胜负单数和已实现盈亏，外加 <code class="font-mono text-xs">summary</code> 汇总。传 month 取该月，不传则取最近 500 天</td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-400">path: <span class="text-primary">&lt;address&gt;</span> · query: <span class="text-primary">month</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
@@ -201,7 +161,7 @@ curl http://127.0.0.1:8038/api/health</pre>
                 <li><code class="font-mono">address required</code> — body 里没有 <code class="font-mono">address</code> 或值为空。</li>
                 <li><code class="font-mono">invalid solana address</code> — 地址不是合法的 Solana 地址（长度或字符集不对）。</li>
                 <li><code class="font-mono">body must be JSON</code> — 没带 <code class="font-mono">Content-Type: application/json</code>，或 body 不是合法 JSON。</li>
-                <li><code class="font-mono">months must be a list of YYYY-MM strings</code> — <code class="font-mono">months</code> 传了空数组、不是数组，或元素不是合法的 <code class="font-mono">YYYY-MM</code>。</li>
+                <li><code class="font-mono">months must be a list of YYYY-MM strings</code> — <code class="font-mono">months</code> 不是数组，或元素不是合法的 <code class="font-mono">YYYY-MM</code>；省略或传 <code class="font-mono">[]</code> 时按默认月份处理。</li>
                 <li><code class="font-mono">wallet saved but sync failed: ...</code> — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 <code class="font-mono">/api/track</code> 或等定时任务重试。</li>
             </ul>
         </div>
@@ -212,65 +172,6 @@ curl http://127.0.0.1:8038/api/health</pre>
 
 {% block scripts %}
 <script>
-async function loadSourceConfig() {
-    const res = await fetch('/api/config/sources', {method: 'GET'});
-    const r = await res.json();
-    if (r.success) {
-        document.getElementById('defaultSource').value = r.default_source || 'gmgn';
-        document.getElementById('enableGMGN').checked = r.enable_gmgn !== false;
-        document.getElementById('enableDebot').checked = r.enable_debot !== false;
-    }
-}
-
-async function saveSourceConfig() {
-    const msg = document.getElementById('sourceMsg');
-    const defaultSource = document.getElementById('defaultSource').value;
-    const enableGMGN = document.getElementById('enableGMGN').checked;
-    const enableDebot = document.getElementById('enableDebot').checked;
-    
-    if (!enableGMGN && !enableDebot) {
-        msg.textContent = '✗ 至少需要启用一个数据源';
-        msg.className = 'text-xs mt-3 text-danger';
-        return;
-    }
-    
-    const res = await fetch('/api/config/sources', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            default_source: defaultSource,
-            enable_gmgn: enableGMGN,
-            enable_debot: enableDebot
-        })
-    });
-    const r = await res.json();
-    if (r.success) {
-        msg.textContent = '✓ 已保存';
-        msg.className = 'text-xs mt-3 text-success';
-    } else {
-        msg.textContent = '✗ 失败：' + r.message;
-        msg.className = 'text-xs mt-3 text-danger';
-    }
-}
-
-async function saveSession() {
-    const msg = document.getElementById('sidMsg');
-    const sid = document.getElementById('sidInput').value.trim();
-    if (!sid) { msg.textContent = '✗ 请粘贴 session id'; msg.className = 'text-xs mt-3 text-danger'; return; }
-    const res = await fetch('/api/config/session', {method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({session_id: sid})});
-    const r = await res.json();
-    if (r.success) {
-        msg.textContent = r.valid ? '✓ 保存成功，登录态有效' : ('⚠️ 已保存，但校验未通过：' + (r.message || ''));
-        msg.className = 'text-xs mt-3 ' + (r.valid ? 'text-success' : 'text-warning');
-        if (r.valid) setTimeout(() => location.reload(), 800);
-    } else { msg.textContent = '✗ 失败：' + r.message; msg.className = 'text-xs mt-3 text-danger'; }
-}
-
-// 页面加载时读取配置
-document.addEventListener('DOMContentLoaded', loadSourceConfig);
-
 function copyCurl() {
     const btn = document.getElementById('curlCopyBtn');
     const text = document.getElementById('curlSample').innerText;
