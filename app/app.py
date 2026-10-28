@@ -241,40 +241,28 @@ async def _sync_loop():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     db = get_db()
-    wallets = [dict(w) for w in db.list_wallets()]
     month = request.query_params.get("month") or _target_months(0)[0]
     page = int(request.query_params.get("page", 1))
-    per_page = 50
-    
-    summaries = [dict(s) for s in db.get_all_summaries(month)]
-    by_addr = {str(w["address"]): dict(w) for w in wallets}
-    rows = []
-    for s in summaries:
-        row_dict = dict(s)
-        wallet_info = by_addr.get(row_dict.get("wallet", ""), {})
-        row_dict["label"] = wallet_info.get("label", "")
-        row_dict["enabled"] = wallet_info.get("enabled", 0)
-        rows.append(row_dict)
-    
-    total_rows = len(rows)
-    total_pages = (total_rows + per_page - 1) // per_page
-    
+    per_page = 30
+
+    total_rows = db.count_wallets(only_enabled=True)
+    total_pages = max((total_rows + per_page - 1) // per_page, 1)
+
     # 确保页数有效
     if page < 1:
         page = 1
-    elif page > total_pages and total_pages > 0:
+    elif page > total_pages:
         page = total_pages
-    
-    start_idx = (page - 1) * per_page
-    end_idx = start_idx + per_page
-    paginated_rows = rows[start_idx:end_idx]
-    
-    total = sum(float(r.get("realized_profit", 0)) for r in paginated_rows)
+
+    rows = [dict(s) for s in db.get_summaries_page(
+        month, per_page, (page - 1) * per_page)]
+
+    total = db.get_month_total(month)
     months = _target_months(6)
     context = _make_json_safe({
         "title": "地址盈利总览",
         "authed": is_authed(request),
-        "rows": paginated_rows,
+        "rows": rows,
         "month": str(month),
         "total": float(total),
         "months": months,
@@ -293,21 +281,19 @@ async def home(request: Request):
 async def wallets_page(request: Request):
     db = get_db()
     page = int(request.query_params.get("page", 1))
-    per_page = 50
-    
-    all_wallets = [dict(w) for w in db.list_wallets()]
-    total_wallets = len(all_wallets)
-    total_pages = (total_wallets + per_page - 1) // per_page
-    
+    per_page = 30
+
+    total_wallets = db.count_wallets()
+    total_pages = max((total_wallets + per_page - 1) // per_page, 1)
+
     # 确保页数有效
     if page < 1:
         page = 1
-    elif page > total_pages and total_pages > 0:
+    elif page > total_pages:
         page = total_pages
-    
-    start_idx = (page - 1) * per_page
-    end_idx = start_idx + per_page
-    paginated_wallets = all_wallets[start_idx:end_idx]
+
+    paginated_wallets = [dict(w) for w in db.list_wallets(
+        limit=per_page, offset=(page - 1) * per_page)]
     
     context = _make_json_safe({
         "title": "地址管理",
@@ -464,7 +450,13 @@ async def api_import_file(file: UploadFile = File(...)):
         data = _json.loads(raw.decode("utf-8"))
     except Exception as e:
         return {"success": False, "message": f"invalid JSON file: {e}"}
-    items = data.get("wallets", data) if isinstance(data, dict) else data
+    if isinstance(data, dict):
+        # Accept {"wallets": [...]}, {"addresses": [...]}, or a single wallet object
+        items = data.get("wallets", data.get("addresses", data))
+        if isinstance(items, dict):
+            items = [items]
+    else:
+        items = data
     if not isinstance(items, list):
         return {"success": False, "message": "file must contain a list"}
     res = db.import_wallets(items)

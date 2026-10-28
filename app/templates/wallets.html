@@ -24,17 +24,18 @@
     <!-- JSON 导入 -->
     <div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover">
         <h2 class="font-semibold mb-4 flex items-center gap-2">📤 批量导入</h2>
-        <p class="text-xs text-gray-400 mb-3">JSON 格式：[{"address":"...","label":"..."}]</p>
+        <p class="text-xs text-gray-400 mb-3">方式一 · 粘贴 JSON（数组，或 {"wallets":[...]} / {"addresses":[...]}）</p>
         <textarea id="jsonInput" rows="3" placeholder='[{"address":"YOUR_SOL_ADDRESS","label":"钱包名称"}]'
                   class="w-full bg-gray-900/50 border border-gray-700/50 rounded-lg px-4 py-2 text-xs font-mono focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/50 transition mb-3"></textarea>
         <div class="flex gap-2">
             <button onclick="importJson()" class="flex-1 btn-success-gradient text-white py-2 rounded-lg text-sm font-medium transition">
-                ✓ 导入
+                ✓ 粘贴导入
             </button>
             <label class="flex-1 bg-gray-700/50 hover:bg-gray-700 text-white py-2 rounded-lg text-sm font-medium cursor-pointer transition text-center">
-                📁 文件<input id="fileInput" type="file" accept=".json" class="hidden" onchange="importFile()">
+                📁 选择文件导入<input id="fileInput" type="file" accept=".json" class="hidden" onchange="importFile()">
             </label>
         </div>
+        <p class="text-xs text-gray-500 mt-2">方式二 · 点右侧按钮选择 .json 文件，选完自动上传，无需再点导入</p>
         <p id="importMsg" class="text-xs mt-3 text-gray-400"></p>
     </div>
 </div>
@@ -209,13 +210,19 @@ async function toggleWallet(address, enabled) {
 }
 function parseItems(text) {
     const data = JSON.parse(text);
-    return Array.isArray(data) ? data : (data.wallets || []);
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+        // Accept {"wallets": [...]}, {"addresses": [...]}, or a single wallet object
+        const items = data.wallets ?? data.addresses ?? data;
+        return Array.isArray(items) ? items : [items];
+    }
+    return [];
 }
 async function importJson() {
     const msg = document.getElementById('importMsg');
     const raw = document.getElementById('jsonInput').value.trim();
     if (!raw) {
-        msg.textContent = '✗ 请先粘贴 JSON 内容或选择文件导入';
+        msg.textContent = '✗ 文本框是空的：请先粘贴 JSON 后再点「粘贴导入」；文件导入请点右侧「选择文件导入」按钮';
         msg.className = 'text-xs mt-3 text-danger';
         return;
     }
@@ -234,16 +241,26 @@ async function importJson() {
     } catch (e) { msg.textContent = '✗ JSON 格式错误：' + e.message; msg.className = 'text-xs mt-3 text-danger'; }
 }
 async function importFile() {
-    const f = document.getElementById('fileInput').files[0];
+    const input = document.getElementById('fileInput');
+    const f = input.files[0];
     if (!f) return;
+    const msg = document.getElementById('importMsg');
+    msg.textContent = `🔄 正在上传 ${f.name}，请稍候…`;
+    msg.className = 'text-xs mt-3 text-gray-400';
     const fd = new FormData();
     fd.append('file', f);
-    const res = await fetch('/api/wallets/import_file', {method: 'POST', body: fd});
-    const r = await res.json();
-    const msg = document.getElementById('importMsg');
-    msg.textContent = r.success ? `✓ 导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 失败：' + r.message);
-    msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
-    if (r.success) setTimeout(() => location.reload(), 800);
+    try {
+        const res = await fetch('/api/wallets/import_file', {method: 'POST', body: fd});
+        const r = await res.json();
+        msg.textContent = r.success ? `✓ 文件导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 文件导入失败：' + r.message);
+        msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
+        if (r.success) setTimeout(() => location.reload(), 800);
+    } catch (e) {
+        msg.textContent = '✗ 文件上传失败：' + e.message;
+        msg.className = 'text-xs mt-3 text-danger';
+    } finally {
+        input.value = '';  // allow re-selecting the same file
+    }
 }
 async function syncNow() {
     const msg = document.getElementById('importMsg') || (() => {const el = document.createElement('p'); el.id = 'importMsg'; document.body.appendChild(el); return el;})();

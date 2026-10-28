@@ -111,6 +111,12 @@ class Database:
             """)
             c.execute("CREATE INDEX IF NOT EXISTS idx_daily_wallet_date "
                       "ON daily_profit (wallet, date)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_daily_date "
+                      "ON daily_profit (date)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_wallets_created "
+                      "ON wallets (created_at)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_wallets_enabled "
+                      "ON wallets (enabled)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_sync_wallet_month "
                       "ON sync_log (wallet, month)")
 
@@ -131,17 +137,25 @@ class Database:
                     updated_at=excluded.updated_at
             """, (address, label, 1 if enabled else 0, now, now))
 
-    def import_wallets(self, items: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Bulk import from JSON list: [{address, label?, enabled?}]."""
+    def import_wallets(self, items: List[Any]) -> Dict[str, int]:
+        """Bulk import from JSON list.
+
+        Accepts [{address, label?, enabled?}] or ["<address>", ...].
+        """
         added = skipped = 0
         for it in items:
-            addr = str(it.get("address", "")).strip()
+            if isinstance(it, str):
+                addr, label, enabled = it.strip(), "", True
+            elif isinstance(it, dict):
+                addr = str(it.get("address", "")).strip()
+                label, enabled = str(it.get("label", "")), bool(it.get("enabled", True))
+            else:
+                skipped += 1
+                continue
             if not addr:
                 skipped += 1
                 continue
-            self.upsert_wallet(addr,
-                               label=str(it.get("label", "")),
-                               enabled=bool(it.get("enabled", True)))
+            self.upsert_wallet(addr, label=label, enabled=enabled)
             added += 1
         return {"added": added, "skipped": skipped}
 
@@ -151,15 +165,25 @@ class Database:
                                (address,)).fetchone()
             return dict(row) if row else None
 
-    def list_wallets(self, only_enabled: bool = False) -> List[Dict[str, Any]]:
+    def list_wallets(self, only_enabled: bool = False,
+                     limit: Optional[int] = None,
+                     offset: int = 0) -> List[Dict[str, Any]]:
         with self._conn() as conn:
-            if only_enabled:
-                rows = conn.execute(
-                    "SELECT * FROM wallets WHERE enabled=1 ORDER BY created_at").fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM wallets ORDER BY created_at").fetchall()
+            where = "WHERE enabled=1" if only_enabled else ""
+            sql = f"SELECT * FROM wallets {where} ORDER BY created_at"
+            params: List[Any] = []
+            if limit is not None:
+                sql += " LIMIT ? OFFSET ?"
+                params += [limit, offset]
+            rows = conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
+
+    def count_wallets(self, only_enabled: bool = False) -> int:
+        with self._conn() as conn:
+            where = "WHERE enabled=1" if only_enabled else ""
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM wallets {where}").fetchone()
+            return int(row["n"]) if row else 0
 
     def delete_wallet(self, address: str) -> int:
         with self._conn() as conn:
@@ -254,6 +278,53 @@ class Database:
     def get_all_summaries(self, month: str) -> List[Dict[str, Any]]:
         wallets = self.list_wallets(only_enabled=True)
         return [self.get_month_summary(w["address"], month) for w in wallets]
+
+    @staticmethod
+    def _month_range(month: str) -> tuple:
+        import calendar as _cal
+        import datetime as _dt
+        y, m = month.split("-")
+        start = int(_dt.datetime(int(y), int(m), 1,
+                                 tzinfo=timezone.utc).timestamp())
+        last = _cal.monthrange(int(y), int(m))[1]
+        end = int(_dt.datetime(int(y), int(m), last, 23, 59, 59,
+                               tzinfo=timezone.utc).timestamp())
+        return start, end
+
+    def get_summaries_page(self, month: str, limit: int,
+                           offset: int) -> List[Dict[str, Any]]:
+        """One SQL: per-wallet month aggregates + label/enabled, paged."""
+        start, end = self._month_range(month)
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT w.address AS wallet, w.label AS label, w.enabled AS enabled,
+                       COUNT(d.date) AS days,
+                       COALESCE(SUM(d.realized_profit), 0) AS realized_profit,
+                       COALESCE(SUM(d.gains), 0) AS gains,
+                       COALESCE(SUM(d.losses), 0) AS losses,
+                       COALESCE(SUM(d.buy_count), 0) AS buy_count,
+                       COALESCE(SUM(d.sell_count), 0) AS sell_count
+                FROM wallets w
+                LEFT JOIN daily_profit d
+                  ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
+                WHERE w.enabled = 1
+                GROUP BY w.address
+                ORDER BY w.created_at
+                LIMIT ? OFFSET ?
+            """, (start, end, limit, offset)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_month_total(self, month: str) -> float:
+        """Total realized profit across enabled wallets for the month."""
+        start, end = self._month_range(month)
+        with self._conn() as conn:
+            row = conn.execute("""
+                SELECT COALESCE(SUM(d.realized_profit), 0) AS total
+                FROM daily_profit d
+                JOIN wallets w ON w.address = d.wallet AND w.enabled = 1
+                WHERE d.date >= ? AND d.date <= ?
+            """, (start, end)).fetchone()
+            return float(row["total"]) if row else 0.0
 
     # ============ sync_log ============
 
