@@ -498,7 +498,7 @@ class Database:
                   ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
                 WHERE w.enabled = 1
                 GROUP BY w.address
-                ORDER BY w.created_at
+                ORDER BY w.created_at DESC, w.address ASC
                 LIMIT ? OFFSET ?
             """, (cutoff_7d, today_start, today_end, start, end,
                   limit, offset)).fetchall()
@@ -547,7 +547,7 @@ class Database:
                            WHERE d9.wallet = w.address
                        )) AS last_synced_at
                 FROM wallets w
-                ORDER BY w.created_at
+                ORDER BY w.created_at DESC, w.address ASC
                 LIMIT ? OFFSET ?
             """, (cutoff_7d, limit, offset)).fetchall()
             out = []
