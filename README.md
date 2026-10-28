@@ -48,8 +48,15 @@ python app/verify_flow.py
    `/profit/<地址>` 是公开分享页，不需要登录）。
 2. `/wallets` 页粘贴 JSON 或上传文件导入地址：
    `[{"address":"...","label":"聪明钱01"}]`，点“立即同步”。
-3. 后台队列会自动同步当月 + 往前 N 个月：最近一次同步超过 `SYNC_INTERVAL_MIN`
-   分钟的地址才会重新入队，每 `SYNC_TICK_SECONDS` 秒处理 `SYNC_BATCH_SIZE` 个。
+3. 后台队列会自动同步当月 + 往前 N 个月：
+   - 当月超过 `SYNC_INTERVAL_MIN` 分钟就会重新入队
+   - 历史月份超过 `HISTORY_SYNC_INTERVAL_MIN` 分钟才会重新入队
+   - 每 `SYNC_TICK_SECONDS` 秒处理一批，最多 `SYNC_BATCH_SIZE` 个钱包、
+     `SYNC_MAX_REQUESTS_PER_TICK` 个 GMGN 请求；只拉真正到期的月份
+
+> 说明：`SYNC_INTERVAL_MIN` 是当月数据的“最短”间隔，实际刷新速度还受
+> `SYNC_MAX_REQUESTS_PER_TICK` 限制。当前 1.5 万地址规模下，一轮当月同步仍需
+> 数小时；需要更快可调大请求预算，但要注意 GMGN 限流。
 
 ## 对外 API（无需登录，直接调）
 
@@ -163,10 +170,12 @@ docs/debot.md       # Debot 抓包样本（历史参考）
 | `DEBOT_SESSION_ID` | 空 | 暂未使用（Debot 源已暂停，保留给后续恢复） |
 | `GMGN_PASSWORD` | 空 → 启动时随机生成 | 控制台密码；生产环境必须设置（compose 会强制要求） |
 | `SESSION_SECRET` | 空 → 每次启动随机 | 会话签名密钥；不设则重启后登录态失效、多 worker 互不认 |
-| `SYNC_INTERVAL_MIN` | `60` | 一个地址的最近同步超过这么多分钟才会再次入队 |
+| `SYNC_INTERVAL_MIN` | `60` | 当月数据最短同步间隔（分钟） |
+| `HISTORY_SYNC_INTERVAL_MIN` | `1440` | 历史月份最短同步间隔（分钟，默认 24h） |
 | `SYNC_MONTHS_BACK` | `2` | 除当月外再往前同步几个月 |
 | `SYNC_TICK_SECONDS` | `60` | 调度队列每批之间休眠的秒数 |
-| `SYNC_BATCH_SIZE` | `20` | 每次调度最多同步多少个地址 |
+| `SYNC_BATCH_SIZE` | `60` | 每批最多处理多少个钱包（还受请求预算限制） |
+| `SYNC_MAX_REQUESTS_PER_TICK` | `60` | 每批最多发起多少个 GMGN 请求 |
 | `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
 | `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
 | `DATABASE_PATH` | `/data/gmgndaily.db` | SQLite 路径 |

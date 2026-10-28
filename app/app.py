@@ -6,7 +6,9 @@ Env:  DATABASE_PATH (default /data/gmgndaily.db)
       GMGN_PASSWORD (web console login; required in production)
       SESSION_SECRET (cookie signing key; set for stable sessions)
       SYNC_INTERVAL_MIN (default 60), SYNC_MONTHS_BACK (default 2)
-      SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 20)
+      HISTORY_SYNC_INTERVAL_MIN (default 1440)
+      SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 60)
+      SYNC_MAX_REQUESTS_PER_TICK (default 60)
       SYNC_LOG_RETENTION_DAYS (default 7), TRACK_MAX_CONCURRENT (default 4)
 """
 
@@ -40,9 +42,13 @@ log = logging.getLogger("gmgndaily")
 
 # ============ config ============
 SYNC_INTERVAL_MIN = int(os.getenv("SYNC_INTERVAL_MIN", "60"))
+HISTORY_SYNC_INTERVAL_MIN = max(
+    int(os.getenv("HISTORY_SYNC_INTERVAL_MIN", "1440")), 1)
 SYNC_MONTHS_BACK = int(os.getenv("SYNC_MONTHS_BACK", "2"))
 SYNC_TICK_SECONDS = max(int(os.getenv("SYNC_TICK_SECONDS", "60")), 5)
-SYNC_BATCH_SIZE = max(int(os.getenv("SYNC_BATCH_SIZE", "20")), 1)
+SYNC_BATCH_SIZE = max(int(os.getenv("SYNC_BATCH_SIZE", "60")), 1)
+SYNC_MAX_REQUESTS_PER_TICK = max(
+    int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "60")), 1)
 SYNC_LOG_RETENTION_DAYS = max(int(os.getenv("SYNC_LOG_RETENTION_DAYS", "7")), 1)
 TRACK_MAX_CONCURRENT = max(int(os.getenv("TRACK_MAX_CONCURRENT", "4")), 1)
 CHAIN = os.getenv("CHAIN", "solana")
@@ -308,6 +314,7 @@ def _summarize_results(results: List[Dict[str, Any]], months: List[str],
         "ok": ok_wallets,
         "failed": len(results) - ok_wallets,
         "total_days": sum(r.get("total_days", 0) for r in results),
+        "requests": sum(len(r.get("months", [])) for r in results),
         "session_expired": session_expired,
         "errors": errors,
     }
@@ -321,17 +328,19 @@ def _sync_wallet_list(wallets: List[Dict[str, Any]],
     expired = False
     for i, w in enumerate(wallets):
         address = w["address"]
+        wallet_months = w.get("due_months") or months
         try:
-            result = sync_one_wallet(address, months)
+            result = sync_one_wallet(address, wallet_months)
         except Exception as e:  # defensive: never abort the whole batch
             code = getattr(e, "code", None)
             result = {"wallet": address, "total_days": 0,
                       "months": [{"month": m, "error": str(e),
-                                  "error_code": code} for m in months]}
+                                  "error_code": code}
+                                 for m in wallet_months]}
             # Record the attempt so a permanently failing wallet does not
             # stay at the head of the queue and hot-loop every tick.
             try:
-                for m in months:
+                for m in wallet_months:
                     get_db().add_sync_log(address, m, 0, 0.0, "error", str(e))
             except Exception:
                 log.warning("[SYNC] could not record failure for %s",
@@ -359,28 +368,57 @@ def sync_all(months: Optional[List[str]] = None,
     return summary
 
 
+def _trim_targets_by_budget(targets: List[Dict[str, Any]],
+                            max_requests: int) -> List[Dict[str, Any]]:
+    """Keep the oldest targets that fit the per-tick request budget."""
+    selected: List[Dict[str, Any]] = []
+    used = 0
+    for target in targets:
+        n = len(target.get("due_months") or [])
+        if n <= 0:
+            continue
+        if selected and used + n > max_requests:
+            break
+        selected.append(target)
+        used += n
+        if used >= max_requests:
+            break
+    return selected
+
+
 def sync_due_batch(limit: Optional[int] = None) -> Dict[str, Any]:
-    """Sync at most `limit` wallets whose last attempt is older than the
-    configured interval. Blocking; used by the scheduler queue."""
+    """Sync the oldest due (wallet, month) targets within a request budget.
+
+    The current month is fetched after SYNC_INTERVAL_MIN (default 60 min);
+    historical months after HISTORY_SYNC_INTERVAL_MIN (default 24h). This
+    keeps the per-tick GMGN request count bounded while refreshing the
+    current month far more often than old months.
+    """
     db = get_db()
     months = _target_months()
-    wallets = db.list_wallets_due(SYNC_INTERVAL_MIN,
-                                  limit or SYNC_BATCH_SIZE)
-    if not wallets:
+    targets = db.list_sync_targets(months, SYNC_INTERVAL_MIN,
+                                   HISTORY_SYNC_INTERVAL_MIN,
+                                   limit or SYNC_BATCH_SIZE)
+    targets = _trim_targets_by_budget(targets, SYNC_MAX_REQUESTS_PER_TICK)
+    if not targets:
         return {"months": months, "wallets": 0, "ok": 0, "failed": 0,
-                "total_days": 0, "session_expired": False, "errors": []}
-    summary = _sync_wallet_list(wallets, months)
+                "total_days": 0, "requests": 0,
+                "session_expired": False, "errors": []}
+    summary = _sync_wallet_list(targets, months)
     _sync_state["last_run"] = datetime.now(timezone.utc).isoformat()
     _sync_state["last_result"] = summary
     return summary
 
 
 async def _sync_loop():
-    log.info("[LOOP] sync queue start: tick=%ss batch=%d stale=%dmin "
-             "months_back=%d", SYNC_TICK_SECONDS, SYNC_BATCH_SIZE,
-             SYNC_INTERVAL_MIN, SYNC_MONTHS_BACK)
+    log.info("[LOOP] sync queue start: tick=%ss batch=%d budget=%d "
+             "current_every=%dmin history_every=%dmin months_back=%d",
+             SYNC_TICK_SECONDS, SYNC_BATCH_SIZE,
+             SYNC_MAX_REQUESTS_PER_TICK, SYNC_INTERVAL_MIN,
+             HISTORY_SYNC_INTERVAL_MIN, SYNC_MONTHS_BACK)
     last_prune = 0.0
     while True:
+        tick_started = time.monotonic()
         try:
             if time.monotonic() - last_prune >= 3600:
                 try:
@@ -404,7 +442,8 @@ async def _sync_loop():
             raise
         except Exception as e:
             log.exception("[LOOP] unexpected: %s", e)
-        await asyncio.sleep(SYNC_TICK_SECONDS)
+        elapsed = time.monotonic() - tick_started
+        await asyncio.sleep(max(1.0, SYNC_TICK_SECONDS - elapsed))
 
 
 def _safe_next(next_url: str) -> str:
@@ -552,8 +591,10 @@ def config_page(request: Request):
     context = _make_json_safe({
         "title": "配置",
         "interval": SYNC_INTERVAL_MIN,
+        "history_interval": HISTORY_SYNC_INTERVAL_MIN,
         "months_back": SYNC_MONTHS_BACK,
         "batch_size": SYNC_BATCH_SIZE,
+        "max_requests": SYNC_MAX_REQUESTS_PER_TICK,
         "tick_seconds": SYNC_TICK_SECONDS,
     })
     context["request"] = request

@@ -577,29 +577,72 @@ class Database:
             return {"total": total, "synced": synced,
                     "unsynced": total - synced}
 
-    def list_wallets_due(self, stale_minutes: int, limit: int) -> List[Dict[str, Any]]:
-        """Enabled wallets whose latest sync attempt is older than the cutoff.
+    def list_sync_targets(self, months: List[str],
+                          current_interval_min: int,
+                          history_interval_min: int,
+                          limit: int) -> List[Dict[str, Any]]:
+        """Return wallets with their due months, oldest sync first.
 
-        Uses sync_state (not daily_profit) so wallets that legitimately have
-        zero trades are still considered synced, and old sync_log pruning does
-        not make them look unsynced. NULL last_synced wallets come first.
+        The current month (months[0]) is due after `current_interval_min`
+        minutes; older months after `history_interval_min` minutes. A wallet
+        is returned once with only its due months, so a fresh current month
+        does not force two extra historical requests.
         """
-        cutoff = (datetime.now(timezone.utc)
-                  - timedelta(minutes=max(stale_minutes, 1))).isoformat()
-        with self._conn() as conn:
-            rows = conn.execute("""
-                SELECT w.* FROM wallets w
-                LEFT JOIN (
-                    SELECT wallet, MAX(updated_at) AS last_synced_at
-                    FROM sync_state GROUP BY wallet
-                ) s ON s.wallet = w.address
+        if not months:
+            return []
+        now = datetime.now(timezone.utc)
+        current_cutoff = (now - timedelta(
+            minutes=max(current_interval_min, 1))).isoformat()
+        history_cutoff = (now - timedelta(
+            minutes=max(history_interval_min, 1))).isoformat()
+
+        values_sql = ", ".join("(?, ?, ?)" for _ in months)
+        params: List[Any] = []
+        for idx, month in enumerate(months):
+            params.extend([month, 1 if idx == 0 else 0, idx])
+        # One wallet may have up to len(months) due rows; this guarantees
+        # enough rows to group into `limit` wallets.
+        row_limit = max(limit, 1) * len(months)
+
+        sql = f"""
+            WITH months(month, is_current, ord) AS (
+                VALUES {values_sql}
+            ),
+            due AS (
+                SELECT w.address AS wallet, m.month AS month,
+                       m.is_current AS is_current, m.ord AS ord,
+                       s.updated_at AS last_synced
+                FROM wallets w
+                CROSS JOIN months m
+                LEFT JOIN sync_state s
+                  ON s.wallet = w.address AND s.month = m.month
                 WHERE w.enabled = 1
-                  AND (s.last_synced_at IS NULL OR s.last_synced_at < ?)
-                ORDER BY CASE WHEN s.last_synced_at IS NULL THEN 0 ELSE 1 END,
-                         s.last_synced_at
-                LIMIT ?
-            """, (cutoff, max(limit, 1))).fetchall()
-            return [dict(r) for r in rows]
+                  AND (s.updated_at IS NULL
+                       OR (m.is_current = 1 AND s.updated_at < ?)
+                       OR (m.is_current = 0 AND s.updated_at < ?))
+            )
+            SELECT wallet, month, is_current, last_synced
+            FROM due
+            ORDER BY CASE WHEN last_synced IS NULL THEN 0 ELSE 1 END,
+                     last_synced,
+                     is_current DESC,
+                     wallet,
+                     ord
+            LIMIT ?
+        """
+        params.extend([current_cutoff, history_cutoff, row_limit])
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        targets: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        for row in rows:
+            wallet = row["wallet"]
+            if wallet not in targets:
+                targets[wallet] = {"address": wallet, "due_months": []}
+                order.append(wallet)
+            targets[wallet]["due_months"].append(row["month"])
+        return [targets[w] for w in order[:max(limit, 1)]]
 
     def get_month_total(self, month: str) -> float:
         """Total realized profit across enabled wallets for the month."""

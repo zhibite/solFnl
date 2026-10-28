@@ -20,19 +20,27 @@
     <h2 class="text-lg font-semibold mb-5 flex items-center gap-2">⚙️ 系统配置</h2>
     <div class="space-y-3 text-sm text-gray-300">
         <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
-            <span>同步间隔</span>
+            <span>当月同步间隔（最短）</span>
             <span class="font-mono font-medium text-primary">{{ interval }} 分钟</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
+            <span>历史月份同步间隔</span>
+            <span class="font-mono font-medium text-primary">{{ history_interval }} 分钟</span>
         </div>
         <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
             <span>同步月份</span>
             <span class="font-mono font-medium text-primary">当月 + 往前 {{ months_back }} 个月</span>
         </div>
         <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
-            <span>每批地址数 / 批次间隔</span>
+            <span>每批地址上限 / 批次间隔</span>
             <span class="font-mono font-medium text-primary">{{ batch_size }} 个 / {{ tick_seconds }} 秒</span>
         </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
+            <span>每轮 GMGN 请求上限</span>
+            <span class="font-mono font-medium text-primary">{{ max_requests }} 次</span>
+        </div>
     </div>
-    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、SYNC_MONTHS_BACK、SYNC_BATCH_SIZE、SYNC_TICK_SECONDS</p>
+    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、HISTORY_SYNC_INTERVAL_MIN、SYNC_MONTHS_BACK、SYNC_BATCH_SIZE、SYNC_TICK_SECONDS、SYNC_MAX_REQUESTS_PER_TICK</p>
 </div>
 
 <!-- 对外 API 文档 -->
