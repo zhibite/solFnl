@@ -101,7 +101,8 @@ class GMGNDailyClient:
     def __init__(self, base_url: str = BASE_URL, chain: str = "sol",
                  timeout: int = 25):
         self.base_url = base_url.rstrip("/")
-        self.chain = chain
+        # GMGN expects "sol"; accept "solana" too and normalize.
+        self.chain = "sol" if chain.lower() == "solana" else chain
         self.timeout = timeout
 
     def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:

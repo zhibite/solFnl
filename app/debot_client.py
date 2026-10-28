@@ -35,7 +35,8 @@ class DebotClient:
         if not session_id:
             raise ValueError("session_id (beegosessionID) is required")
         self.session_id = session_id.strip()
-        self.chain = chain
+        # Debot expects "solana"; accept "sol" too and normalize.
+        self.chain = "solana" if chain.lower() == "sol" else chain
         self.timeout = timeout
 
     def _get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:

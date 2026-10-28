@@ -213,8 +213,19 @@ function parseItems(text) {
 }
 async function importJson() {
     const msg = document.getElementById('importMsg');
+    const raw = document.getElementById('jsonInput').value.trim();
+    if (!raw) {
+        msg.textContent = '✗ 请先粘贴 JSON 内容或选择文件导入';
+        msg.className = 'text-xs mt-3 text-danger';
+        return;
+    }
     try {
-        const items = parseItems(document.getElementById('jsonInput').value);
+        const items = parseItems(raw);
+        if (!items.length) {
+            msg.textContent = '✗ 未解析到任何地址，请检查 JSON 格式：[{"address":"...","label":"..."}]';
+            msg.className = 'text-xs mt-3 text-danger';
+            return;
+        }
         const r = await post('/api/wallets/import', {wallets: items});
         if (!r) return;
         msg.textContent = r.success ? `✓ 导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 失败：' + r.message);
