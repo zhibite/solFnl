@@ -243,6 +243,9 @@ async def home(request: Request):
     db = get_db()
     wallets = [dict(w) for w in db.list_wallets()]
     month = request.query_params.get("month") or _target_months(0)[0]
+    page = int(request.query_params.get("page", 1))
+    per_page = 50
+    
     summaries = [dict(s) for s in db.get_all_summaries(month)]
     by_addr = {str(w["address"]): dict(w) for w in wallets}
     rows = []
@@ -252,15 +255,35 @@ async def home(request: Request):
         row_dict["label"] = wallet_info.get("label", "")
         row_dict["enabled"] = wallet_info.get("enabled", 0)
         rows.append(row_dict)
-    total = sum(float(r.get("realized_profit", 0)) for r in rows)
+    
+    total_rows = len(rows)
+    total_pages = (total_rows + per_page - 1) // per_page
+    
+    # 确保页数有效
+    if page < 1:
+        page = 1
+    elif page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_rows = rows[start_idx:end_idx]
+    
+    total = sum(float(r.get("realized_profit", 0)) for r in paginated_rows)
     months = _target_months(6)
     context = _make_json_safe({
         "title": "地址盈利总览",
         "authed": is_authed(request),
-        "rows": rows,
+        "rows": paginated_rows,
         "month": str(month),
         "total": float(total),
         "months": months,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total_rows,
+            "total_pages": total_pages,
+        },
     })
     context["request"] = request
     return templates.TemplateResponse(request, "index.html", context)

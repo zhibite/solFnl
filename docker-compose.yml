@@ -5,10 +5,15 @@ services:
     build: .
     restart: unless-stopped
     volumes:
-      # Coolify: 在 Storage 选项卡中挂载 /gmgndaily/data 到容器 /data
-      - /gmgndaily/data:/data
-    env_file:
-      - .env
+      # Plain `docker compose up` persistence (named volume).
+      # NOTE on Coolify: if you mount storage in the Coolify UI
+      # (e.g. host /gmgndaily/data -> container /data), DELETE this
+      # volumes block to avoid double-mounting /data.
+      - gmgndaily_data:/data
+    # NOTE: no env_file here on purpose. The repo does not ship a `.env`
+    # file, and a missing env_file breaks `docker compose up`.
+    # Provide variables via the shell / Coolify environment instead.
+    # See `.env.docker` for the full list.
     environment:
       - DATABASE_PATH=/data/gmgndaily.db
       - PYTHONUNBUFFERED=1
@@ -18,3 +23,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+volumes:
+  gmgndaily_data:
