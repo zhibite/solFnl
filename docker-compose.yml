@@ -1,21 +1,33 @@
-version: '3.8'
-
 services:
   gmgndaily:
     build: .
     restart: unless-stopped
+    ports:
+      - "${PORT:-8038}:8038"
     volumes:
       # Plain `docker compose up` persistence (named volume).
       # NOTE on Coolify: if you mount storage in the Coolify UI
       # (e.g. host /gmgndaily/data -> container /data), DELETE this
       # volumes block to avoid double-mounting /data.
       - gmgndaily_data:/data
-    # NOTE: no env_file here on purpose. The repo does not ship a `.env`
-    # file, and a missing env_file breaks `docker compose up`.
-    # Provide variables via the shell / Coolify environment instead.
-    # See `.env.docker` for the full list.
+    # `docker compose` reads `.env` in this directory for ${...}
+    # interpolation. At minimum set GMGN_PASSWORD there (see .env.docker).
+    # A missing/empty GMGN_PASSWORD makes compose fail fast rather than
+    # starting with a known default password.
     environment:
       - DATABASE_PATH=/data/gmgndaily.db
+      - DEBOT_SESSION_ID=${DEBOT_SESSION_ID:-}
+      - GMGN_PASSWORD=${GMGN_PASSWORD:?set GMGN_PASSWORD in .env}
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      - CHAIN=${CHAIN:-sol}
+      - SYNC_INTERVAL_MIN=${SYNC_INTERVAL_MIN:-60}
+      - SYNC_MONTHS_BACK=${SYNC_MONTHS_BACK:-2}
+      - SYNC_TICK_SECONDS=${SYNC_TICK_SECONDS:-60}
+      - SYNC_BATCH_SIZE=${SYNC_BATCH_SIZE:-20}
+      - SYNC_LOG_RETENTION_DAYS=${SYNC_LOG_RETENTION_DAYS:-7}
+      - TRACK_MAX_CONCURRENT=${TRACK_MAX_CONCURRENT:-4}
+      - PORT=8038
+      - HOST=0.0.0.0
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     healthcheck:

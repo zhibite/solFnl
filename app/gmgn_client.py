@@ -65,6 +65,16 @@ def _to_float(v: Any) -> float:
         return 0.0
 
 
+def _to_int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+
 def normalize(item: Dict[str, Any]) -> Dict[str, Any]:
     """把接口返回的一条日记录转成规整的 dict（GMGN 格式到内部格式的映射）.
     
@@ -75,16 +85,19 @@ def normalize(item: Dict[str, Any]) -> Dict[str, Any]:
       buy_amount_usd    -> buy_volume
       sell_amount_usd   -> sell_volume
       (win/loss_profit) -> gains/losses
+      win_sells / loss_sells 原样保留 (胜率 = win_sells / (win_sells+loss_sells))
     """
     return {
         "date": int(item.get("date", 0)),
-        "buy_count": int(item.get("total_buys", 0) or 0),
-        "sell_count": int(item.get("total_sells", 0) or 0),
+        "buy_count": _to_int(item.get("total_buys")),
+        "sell_count": _to_int(item.get("total_sells")),
         "buy_volume": _to_float(item.get("buy_amount_usd")),
         "sell_volume": _to_float(item.get("sell_amount_usd")),
         "realized_profit": _to_float(item.get("total_profit")),
         "gains": _to_float(item.get("win_profit")),
         "losses": _to_float(item.get("loss_profit")),
+        "win_sells": _to_int(item.get("win_sells")),
+        "loss_sells": _to_int(item.get("loss_sells")),
         "last_trade_time": 0,  # GMGN 无此字段，用 0
     }
 

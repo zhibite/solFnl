@@ -14,14 +14,19 @@
 ## 快速启动（docker）
 
 ```bash
-cp .env.docker .env         # 填 DEBOT_SESSION_ID / GMGN_PASSWORD
+cp .env.docker .env         # 必填 GMGN_PASSWORD / SESSION_SECRET，按需填 DEBOT_SESSION_ID
 docker compose up -d --build
-# 打开 http://服务器IP:8038 ，用户名 zengsw 登录
+# 打开 http://服务器IP:8038 ，用户名 zengsw + 上面设置的密码登录
 ```
+
+> `docker compose` 会读取同目录 `.env` 做变量替换；`GMGN_PASSWORD` 为空时
+> compose 会直接报错，避免用默认密码启动。密码可用 `openssl rand -base64 18`
+> 生成，`SESSION_SECRET` 用 `openssl rand -hex 32` 生成。
 
 ## Coolify 部署
 
-详见 [DEPLOY.md](./DEPLOY.md) — 包含 fnl.bquant.com 部署配置说明。
+Coolify 上把变量配在应用环境变量里即可；数据库卷持久化说明见
+[docs/DATABASE_PERSISTENCE.md](./docs/DATABASE_PERSISTENCE.md)。
 
 ## 本地开发
 
@@ -29,38 +34,123 @@ docker compose up -d --build
 cd app
 pip install -r requirements.txt
 set DATABASE_PATH=./data.db & set DEBOT_SESSION_ID=你的beegosessionID
+set GMGN_PASSWORD=你的控制台密码
 python app.py               # http://127.0.0.1:8038
+
+# 可选：回到仓库根目录跑一次全链路自检（临时库，不碰生产数据）
+cd ..
+pip install -r requirements-dev.txt
+python app/verify_flow.py
 ```
 
 ## 用法
 
-1. 登录控制台（`/`、`/wallets`、`/config` 需登录，用户名 `zengsw`）。
+1. 登录控制台（`/`、`/wallets`、`/wallet/<地址>`、`/config` 需登录，用户名 `zengsw`；
+   `/profit/<地址>` 是公开分享页，不需要登录）。
 2. `/wallets` 页粘贴 JSON 或上传文件导入地址：
    `[{"address":"...","label":"聪明钱01"}]`，点“立即同步”。
 3. `beegosessionID` 过期后去 `/config` 页粘贴新的（或改 `.env` 重启）。
-4. 定时任务每 `SYNC_INTERVAL_MIN` 分钟自动同步当月 + 往前 N 个月。
+4. 后台队列会自动同步当月 + 往前 N 个月：最近一次同步超过 `SYNC_INTERVAL_MIN`
+   分钟的地址才会重新入队，每 `SYNC_TICK_SECONDS` 秒处理 `SYNC_BATCH_SIZE` 个。
 
 ## 对外 API（无需登录，直接调）
 
-| 接口 | 说明 |
-|---|---|
-| `GET /api/health` | 健康检查 |
-| `GET /api/wallets` | 地址列表 |
-| `GET /api/profit?month=2026-09` | 全部地址月汇总（含总 PnL） |
-| `GET /api/profit/<address>?month=2026-09` | 单地址每日明细（不带 month = 最近 500 天） |
+线上服务地址为 `https://fnl.bquant.com`，所有路径都挂在它之下，例如 `https://fnl.bquant.com/api/wallets`。
+（本地自测时为 `http://127.0.0.1:8038`，端口由 `PORT` 决定，默认 8038。）
+这一组接口全部开放，**不需要登录、不要带 Cookie 或 token**。
 
-单地址示例返回：`days[]` 每个元素字段与 `docs/debot.md` 抓包 1:1 对应
-（`date, buy_count, sell_count, buy_volume, sell_volume, realized_profit, gains, losses, last_trade_time`），
-外加 `summary` 月汇总。
+### 三态返回合约（查询单地址时）
+
+调用 `GET /api/profit/<address>` 时，外部系统会得到以下状态之一（HTTP 均为 200，用 `status` 字段区分）：
+
+| Status | 语义 | 返回数据 | 外部系统该怎么办 |
+|--------|------|----------|--------------|
+| `ok` | 地址存在且有盈利数据 | `summary` + `days[]` | 直接使用数据渲染 |
+| `pending` | 地址已登记但数据尚未就绪 | `message` + `retry_after_seconds` | 建议间隔后重新查询 |
+| `not_found` | 地址未在跟踪列表中 | `action` 字段明确指示调用 POST /api/track | 按 `action` 调用 POST /api/track 登记地址 |
+| `invalid_address` | 地址格式非法 | 错误说明 | 检查地址格式（32-44 个 base58 字符） |
+
+**关键提示**：判断分支时务必用 `status` 字段而非只看 `success`，确保正确处理三种场景。
+
+### 通用约定
+
+- POST 接口必须带请求头 `Content-Type: application/json`，请求体是一个 JSON 对象；GET 接口用 query 参数传月份。
+- 所有响应都是 JSON，其中 `success` 是布尔值表示成败。**失败时 HTTP 状态码仍是 200**，请读 `message` 字段拿具体原因，不要只看状态码。
+- 地址校验：base58 编码、32–44 个字符的 Solana 地址。
+
+### 接口列表
+
+| 方法 | 端点 | 用途 | 请求参数 |
+|---|---|---|---|
+| POST | `/api/wallets` | 只把地址登记进跟踪列表，**不抓取**任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态 | body: `address` (必填) · `label` (可选) |
+| POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
+| GET | `/api/wallets` | 列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功 | 无 |
+| GET | `/api/profit?month=2026-09` | 所有**已启用**地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 `total_pnl`。不传 month 则取当月 | query: `month` (可选, YYYY-MM) |
+| GET | `/api/profit/<address>?month=2026-09` | 单个地址的每日明细，`days[]` 按天给买入卖出笔数与金额、已实现盈亏，外加 `summary` 汇总。不传 month 则取最近 500 天 | path: `<address>` · query: `month` (可选) |
+| GET | `/profit/<address>?month=2026-09` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
+| GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
+
+### 请求参数详解（两个 POST 接口通用）
+
+- `address` **（必填）** — Solana 地址，base58 编码、32–44 个字符。缺失或为空报 `address required`，格式不对报 `invalid solana address`。
+- `label`（可选）— 这个地址的备注名，例如「聪明钱01」，会显示在网页和汇总里。不传则保留该地址已有的备注（新地址为空）。
+- `months`（仅 `/api/track`，可选）— 要抓哪几个月，数组，元素形如 `"2026-10"`。不传则按系统配置抓当月 + 往前 N 个月。
+
+### 调用示例
+
+```bash
+# 1) 登记地址，不抓数据
+curl -X POST https://fnl.bquant.com/api/wallets \
+  -H "Content-Type: application/json" \
+  -d '{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01"}'
+
+# 2) 登记地址 + 立即抓取入库
+curl -X POST https://fnl.bquant.com/api/track \
+  -H "Content-Type: application/json" \
+  -d '{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01","months":["2026-10"]}'
+
+# 3) 查看地址列表
+curl https://fnl.bquant.com/api/wallets
+
+# 4) 全部地址当月汇总 / 单地址每日明细
+curl "https://fnl.bquant.com/api/profit?month=2026-10"
+curl "https://fnl.bquant.com/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
+
+# 5) 健康检查
+curl https://fnl.bquant.com/api/health
+```
+
+### 返回示例
+
+- `POST /api/wallets` → `{"success": true, "wallet": {"address": "...", "label": "...", "enabled": 1, "created_at": "...", "updated_at": "..."}}`
+- `POST /api/track` → `{"success": true, "wallet": "...", "added": true, "months": ["2026-10"], "results": [{"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}], "summary": {...}, "profit_url": "/profit/...?month=2026-10"}`，其中 `added` 表示这次是不是新加的地址，`results` 是每月抓取结果。若所有月份都抓取失败，`success` 为 `false` 且 `message` 以 `wallet saved but sync failed` 开头（地址仍会保留）。
+- `GET /api/profit` → `{"success": true, "month": "2026-10", "total_pnl": 1234.5, "wallets": [...]}`
+- `GET /api/profit/<address>` → `{"success": true, "wallet": "...", "month": "2026-10", "summary": {...}, "days": [...]}`
+
+单地址的 `days[]` 每个元素字段与 `docs/debot.md` 抓包 1:1 对应
+（`date, buy_count, sell_count, buy_volume, sell_volume, realized_profit, gains, losses, last_trade_time`）。
+
+### 常见错误（success 为 false，看 message）
+
+- `address required` — body 里没有 `address` 或值为空。
+- `invalid solana address` — 地址不是合法的 Solana 地址（长度或字符集不对）。
+- `body must be JSON` — 没带 `Content-Type: application/json`，或 body 不是合法 JSON。
+- `months must be a list of YYYY-MM strings` — `months` 传了空数组、不是数组，或元素不是合法月份。
+- `wallet saved but sync failed: ...` — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 `/api/track` 或等定时任务重试。
+
+**怎么选**：只想批量加地址选 `/api/wallets`（瞬间返回）；想加完马上拿到数据选 `/api/track`（会等待抓取完成）。拿到数据后用 `/api/profit` 系列读结果。
 
 ## 目录
 
 ```
 app/
-  app.py            # FastAPI：页面 + 导入 + 定时同步 + 对外 API
+  app.py            # FastAPI：页面 + 导入 + 同步队列 + 对外 API
   debot_client.py   # debot 日历接口客户端（带 beegosessionID Cookie）
-  database.py       # SQLite：wallets / daily_profit / sync_log / config
-  templates/        # base, index, wallets, detail, config, login
+  gmgn_client.py    # GMGN daily_profits 客户端
+  profit_source.py  # GMGN/Debot 双源适配 + fallback
+  database.py       # SQLite：wallets / daily_profit / sync_log / sync_state / config
+  validators.py     # Solana 地址、YYYY-MM 校验
+  templates/        # base, index, wallets, detail, profit, config, login
   static/style.css
 docs/debot.md       # 接口抓包样本（字段字典）
 ```
@@ -70,8 +160,13 @@ docs/debot.md       # 接口抓包样本（字段字典）
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `DEBOT_SESSION_ID` | 空 | beegosessionID（也可存 DB，经 `/config` 页写入） |
-| `GMGN_PASSWORD` | `anywn076034` | 控制台密码 |
-| `SYNC_INTERVAL_MIN` | `60` | 同步间隔（分钟） |
+| `GMGN_PASSWORD` | 空 → 启动时随机生成 | 控制台密码；生产环境必须设置（compose 会强制要求） |
+| `SESSION_SECRET` | 空 → 每次启动随机 | 会话签名密钥；不设则重启后登录态失效、多 worker 互不认 |
+| `SYNC_INTERVAL_MIN` | `60` | 一个地址的最近同步超过这么多分钟才会再次入队 |
 | `SYNC_MONTHS_BACK` | `2` | 除当月外再往前同步几个月 |
+| `SYNC_TICK_SECONDS` | `60` | 调度队列每批之间休眠的秒数 |
+| `SYNC_BATCH_SIZE` | `20` | 每次调度最多同步多少个地址 |
+| `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
+| `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
 | `DATABASE_PATH` | `/data/gmgndaily.db` | SQLite 路径 |
 | `CHAIN` | `solana` | debot chain 参数 |

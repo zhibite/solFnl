@@ -35,6 +35,9 @@
             <div>
                 <div class="text-sm text-gray-400 mb-2">跟踪地址数</div>
                 <div class="text-4xl font-bold text-primary">{{ pagination.total }}</div>
+                {% if sync_stats is defined %}
+                <div class="text-xs text-gray-400 mt-2">已更新 {{ sync_stats.synced }} · 未更新 {{ sync_stats.unsynced }}</div>
+                {% endif %}
             </div>
             <div class="text-3xl">💼</div>
         </div>
@@ -66,10 +69,14 @@
                     <th class="px-6 py-3">备注</th>
                     <th class="px-6 py-3 text-right">天数</th>
                     <th class="px-6 py-3 text-right">盈利</th>
+                    <th class="px-6 py-3 text-right">近7天盈利</th>
                     <th class="px-6 py-3 text-right">盈利额</th>
                     <th class="px-6 py-3 text-right">亏损额</th>
+                    <th class="px-6 py-3 text-right">胜率</th>
+                    <th class="px-6 py-3 text-right">更新时间</th>
                     <th class="px-6 py-3 text-right">买/卖笔数</th>
                     <th class="px-6 py-3">状态</th>
+                    <th class="px-6 py-3">更新</th>
                 </tr>
             </thead>
             <tbody>
@@ -85,16 +92,22 @@
                     <td class="px-6 py-4 text-right font-bold {% if r.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ "%.2f"|format(r.realized_profit) }}
                     </td>
+                    <td class="px-6 py-4 text-right font-bold">{{ "%.2f"|format(r.pnl_7d or 0) }}</td>
                     <td class="px-6 py-4 text-right text-success">{{ "%.2f"|format(r.gains) }}</td>
                     <td class="px-6 py-4 text-right text-danger">{{ "%.2f"|format(r.losses) }}</td>
+                    <td class="px-6 py-4 text-right text-gray-300">{% if r.win_rate is not none %}{{ "%.1f"|format(r.win_rate * 100) }}%{% else %}-{% endif %}</td>
+                    <td class="px-6 py-4 text-right text-gray-400 text-xs">{{ r.updated_at[:19] if r.updated_at else '-' }}</td>
                     <td class="px-6 py-4 text-right text-gray-300">{{ r.buy_count }}/{{ r.sell_count }}</td>
                     <td class="px-6 py-4">
                         {% if r.enabled %}<span class="inline-block px-2 py-1 rounded-full bg-success/20 text-success text-xs">✓ 同步中</span>
                         {% else %}<span class="inline-block px-2 py-1 rounded-full bg-gray-700/50 text-gray-400 text-xs">已停用</span>{% endif %}
                     </td>
+                    <td class="px-6 py-4">
+                        <button onclick="syncOne('{{ r.wallet }}', this)" class="text-primary hover:text-blue-400 text-xs font-medium transition">🔄 更新</button>
+                    </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="8" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="12" class="px-6 py-12 text-center text-gray-500">
                     还没有地址，去 <a href="/wallets" class="text-primary hover:underline font-medium">地址管理</a> 导入吧 →
                 </td></tr>
                 {% endfor %}
@@ -145,4 +158,29 @@
     </div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function syncOne(address, btn) {
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '⏳ 更新中…'; btn.disabled = true; }
+    try {
+        const res = await fetch('/api/sync/wallet', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({address})});
+        if (res.url && res.url.includes('/login')) {
+            location.href = '/login?next=' + encodeURIComponent(location.pathname);
+            return;
+        }
+        const r = await res.json();
+        if (!r.success) { alert('更新失败：' + (r.message || '未知')); return; }
+        location.reload();
+    } catch (e) {
+        alert('更新失败：' + e.message);
+    } finally {
+        if (btn) { btn.textContent = orig; btn.disabled = false; }
+    }
+}
+</script>
 {% endblock %}

@@ -1,0 +1,324 @@
+# 对外 API 文档
+
+本文件是控制台 `/config` 页面「对外 API 文档」区块的完整版，供第三方系统集成参考。
+
+服务基于 FastAPI，源码在 `app/app.py`。
+
+---
+
+## 一、通用约定
+
+- **基础地址**：线上服务地址为 `https://fnl.bquant.com`，所有路径都挂在它之下，例如 `https://fnl.bquant.com/api/wallets`。
+  （本地自测时为 `http://127.0.0.1:8038`，端口由环境变量 `PORT` 决定，默认 `8038`。）
+- **鉴权**：对外接口全部开放，**不需要登录、不要带 Cookie 或 token**，直接请求即可。
+- **请求格式**：
+  - POST 接口必须带请求头 `Content-Type: application/json`，请求体是一个 JSON 对象。
+  - GET 接口用 query 参数传月份等可选值。
+- **返回格式**：统一返回 JSON，其中 `success` 是布尔值表示成败。
+  **失败时 HTTP 状态码仍是 200**，请读 `message` 字段拿具体原因，不要只看状态码。
+- **地址校验**：base58 编码、32–44 个字符的 Solana 地址，正则 `^[1-9A-HJ-NP-Za-km-z]{32,44}$`。
+
+## 三态返回（查询单地址时）
+
+调用 `GET /api/profit/<address>` 时，外部方会得到以下四种状态之一（HTTP 均为 200，用 `status` 字段区分）：
+
+| Status | `success` | 语义 | 包含字段 | 外部方该怎么办 |
+|--------|-----------|------|---------|--------------|
+| `ok` | `true` | 地址存在且有盈利数据 | `summary` + `days[]` | 直接使用数据 |
+| `pending` | `true` | 地址已登记但数据尚未就绪 | `retry_after_seconds` | 稍后重新查询（建议间隔见 `retry_after_seconds`） |
+| `not_found` | `false` | 地址未在跟踪列表中 | `action` 字段含 POST 指令 | 按 `action` 指示调用 POST /api/track 登记该地址 |
+| `invalid_address` | `false` | 地址或月份格式非法 | `message` 说明原因 | 检查地址（32-44 个 base58 字符）和月份（YYYY-MM 格式） |
+
+**重要提示**：
+- 判断返回结果时，**务必用 `status` 字段而不是只看 `success`**。这样即使 API 返回格式变化，外部方的分支逻辑仍能正确执行。
+- `month` 参数必须是 `YYYY-MM` 格式（如 `2026-10`），不符合格式会返回 `invalid_address` 状态。
+
+---
+
+## 二、接口列表
+
+| 方法 | 端点 | 用途 | 请求参数 |
+|---|---|---|---|
+| POST | `/api/wallets` | 只把地址登记进跟踪列表，**不抓取**任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态 | body: `address` (必填) · `label` (可选) |
+| POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
+| GET | `/api/wallets` | 列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功 | 无 |
+| GET | `/api/profit?month=2026-10` | 所有**已启用**地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 `total_pnl`。不传 month 则取当月 | query: `month` (可选, YYYY-MM) |
+| GET | `/api/profit/<address>?month=2026-10` | **三态查询**（见下方"三态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) |
+| GET | `/profit/<address>?month=2026-10` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
+| GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
+
+---
+
+## 三、请求参数详解（两个 POST 接口通用）
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `address` | 是 | Solana 地址，base58 编码、32–44 个字符。缺失或为空报 `address required`，格式不对报 `invalid solana address` |
+| `label` | 否 | 这个地址的备注名，例如「聪明钱01」，会显示在网页和汇总里。不传则保留该地址已有的备注（新地址为空） |
+| `months` | 否（仅 `/api/track`） | 要抓哪几个月，数组，元素形如 `"2026-10"`。不传则按系统配置抓当月 + 往前 N 个月（`SYNC_MONTHS_BACK`） |
+
+---
+
+## 四、调用示例（curl）
+
+```bash
+# 1) 登记地址，不抓数据
+curl -X POST https://fnl.bquant.com/api/wallets \
+  -H "Content-Type: application/json" \
+  -d '{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01"}'
+
+# 2) 登记地址 + 立即抓取入库
+curl -X POST https://fnl.bquant.com/api/track \
+  -H "Content-Type: application/json" \
+  -d '{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01","months":["2026-10"]}'
+
+# 3) 查看地址列表
+curl https://fnl.bquant.com/api/wallets
+
+# 4) 全部地址当月汇总 / 单地址每日明细
+curl "https://fnl.bquant.com/api/profit?month=2026-10"
+curl "https://fnl.bquant.com/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
+
+# 5) 健康检查
+curl https://fnl.bquant.com/api/health
+```
+
+Python 调用示例：
+
+```python
+import requests
+
+BASE = "https://fnl.bquant.com"
+ADDR = "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN"
+
+# 只登记，不抓取
+r = requests.post(f"{BASE}/api/wallets",
+                  json={"address": ADDR, "label": "聪明钱01"})
+print(r.json())
+
+# 登记并抓取
+r = requests.post(f"{BASE}/api/track",
+                  json={"address": ADDR, "label": "聪明钱01", "months": ["2026-10"]})
+print(r.json())
+
+# 读月汇总
+r = requests.get(f"{BASE}/api/profit", params={"month": "2026-10"})
+print(r.json())
+```
+
+---
+
+## 五、返回示例
+
+**`POST /api/wallets`**
+
+```json
+{
+  "success": true,
+  "wallet": {
+    "address": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+    "label": "聪明钱01",
+    "enabled": 1,
+    "created_at": "2026-10-28T12:13:50.287281+00:00",
+    "updated_at": "2026-10-28T12:13:50.287281+00:00"
+  }
+}
+```
+
+**`POST /api/track`**
+
+```json
+{
+  "success": true,
+  "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+  "added": true,
+  "months": ["2026-10"],
+  "results": [
+    {"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}
+  ],
+  "summary": { "...": "首个成功月份的汇总，结构同 GET /api/profit/<address> 的 summary" },
+  "profit_url": "/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
+}
+```
+
+- `added` 表示这次是不是新加的地址（已存在则为 `false`）。
+- `months` 是本次请求的月份列表；`results` 是按月的抓取结果，失败的月份会带 `error`。
+- 所有月份都失败时 `success` 为 `false`，`message` 以 `wallet saved but sync failed` 开头（地址仍会保存）。
+- `profit_url` 是相对路径，拼上基础地址即可在浏览器打开。
+
+**`GET /api/wallets`**
+
+```json
+{
+  "success": true,
+  "wallets": [
+    {
+      "address": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+      "label": "聪明钱01",
+      "enabled": 1,
+      "created_at": "2026-10-28T12:13:50.287281+00:00",
+      "updated_at": "2026-10-28T12:13:50.287281+00:00"
+    }
+  ]
+}
+```
+
+**`GET /api/profit`**
+
+```json
+{
+  "success": true,
+  "month": "2026-10",
+  "total_pnl": 1234.5,
+  "wallets": [ { "...": "每个已启用地址一行，结构同下面的 summary" } ]
+}
+```
+
+**`GET /api/profit/<address>`**
+
+状态 `ok`（有数据）：
+
+```json
+{
+  "success": true,
+  "status": "ok",
+  "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+  "month": "2026-10",
+  "summary": {
+    "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+    "month": "2026-10",
+    "days": 21,
+    "realized_profit": 1234.5,
+    "gains": 2100.0,
+    "losses": 865.5,
+    "buy_count": 88,
+    "sell_count": 42,
+    "win_sells": 30,
+    "loss_sells": 12,
+    "win_rate": 0.7142857142857143,
+    "pnl_7d": 320.0
+  },
+  "days": [
+    {
+      "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+      "date": 1761955200,
+      "buy_count": 3,
+      "sell_count": 1,
+      "buy_volume": 1200.5,
+      "sell_volume": 900.25,
+      "realized_profit": 300.25,
+      "gains": 400.0,
+      "losses": 99.75,
+      "win_sells": 1,
+      "loss_sells": 0,
+      "last_trade_time": 1761993600
+    }
+  ]
+}
+```
+
+状态 `pending`（地址已登记，数据还没抓到）：
+
+```json
+{
+  "success": true,
+  "status": "pending",
+  "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+  "month": "2026-10",
+  "message": "address is tracked but profit data is not available yet, it will appear after the next sync",
+  "retry_after_seconds": 3600,
+  "summary": null,
+  "days": []
+}
+```
+
+状态 `not_found`（地址不在跟踪列表里）：
+
+```json
+{
+  "success": false,
+  "status": "not_found",
+  "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+  "message": "address not tracked yet, call POST /api/track to add it",
+  "action": {
+    "method": "POST",
+    "endpoint": "/api/track",
+    "body": { "address": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN" },
+    "description": "登记该地址并立即抓取历史盈利数据"
+  }
+}
+```
+
+状态 `invalid_address`（地址或月份格式非法）：
+
+```json
+{
+  "success": false,
+  "status": "invalid_address",
+  "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+  "message": "invalid solana address"
+}
+```
+
+`days[]` 每个元素字段与 `docs/debot.md` 抓包 1:1 对应
+（`date, buy_count, sell_count, buy_volume, sell_volume, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`）。
+`date` 和 `last_trade_time` 是 UTC 秒级时间戳。
+
+**`GET /api/health`**
+
+```json
+{ "success": true, "service": "gmgndaily" }
+```
+
+---
+
+## 六、常见错误（`success` 为 false，看 `message`）
+
+| `message` | 原因 | 处理 |
+|---|---|---|
+| `address required` | body 里没有 `address` 或值为空 | 补上 `address` 字段 |
+| `invalid solana address` | 地址不是合法的 Solana 地址（长度或字符集不对） | 核对地址，应为 base58、32–44 字符 |
+| `invalid month format, use YYYY-MM` | `month` 参数格式不对 | 传 `2026-10` 这样的 `YYYY-MM` 格式，或直接省略该参数 |
+| `body must be JSON` | 没带 `Content-Type: application/json`，或 body 不是合法 JSON | 补请求头，确认 body 是合法 JSON |
+| `months must be a list of YYYY-MM strings` | `months` 传了空数组、不是数组，或元素不是合法月份 | 传 `["2026-10"]` 这样的非空数组，或直接省略该字段 |
+| `wallet saved but sync failed: ...` | 地址已经存进去了，只是这次抓取失败 | 可稍后重新调用 `/api/track`，或等定时任务重试；`profit_url` 仍可用于查看已有数据 |
+
+> 注意：`GET /api/profit/<address>` 的错误信息放在 `message` 字段，同时 `status` 会是
+> `invalid_address` / `not_found` 两个值之一。`pending` 状态下 `success` 为 `true`，
+> 因为请求本身是成功完成的，只是数据还没准备好。
+
+---
+
+## 七、怎么选接口
+
+- 只想**批量加地址** → `POST /api/wallets`（瞬间返回，不触发抓取）。
+- 想**加完马上拿数据** → `POST /api/track`（会等待抓取完成，耗时较长）。
+- 拿到数据后用 `GET /api/profit` 系列读结果：整体看 `GET /api/profit`，单地址看 `GET /api/profit/<address>`，要给人看就用 `GET /profit/<address>`（网页版）。
+
+典型流程：
+
+```
+POST /api/track          登记 + 抓取
+      ↓
+GET  /api/profit         看全部地址当月汇总
+GET  /api/profit/<addr>  看单个地址每日明细
+```
+
+单地址查询的三态处理示例（推荐外部方按 `status` 分支）：
+
+```python
+r = requests.get(f"{BASE}/api/profit/{ADDR}", params={"month": "2026-10"})
+data = r.json()
+
+if data["status"] == "ok":
+    print("有数据:", data["summary"]["realized_profit"])
+elif data["status"] == "pending":
+    print(f"数据未就绪，{data['retry_after_seconds']} 秒后重试")
+elif data["status"] == "not_found":
+    # 按 action 字段的指示登记地址
+    requests.post(f"{BASE}/api/track", json=data["action"]["body"])
+else:  # invalid_address
+    print("地址或月份格式错误:", data["message"])
+```
+
+---

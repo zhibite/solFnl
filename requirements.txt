@@ -1,5 +1,2 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-jinja2>=3.1.0
-python-multipart>=0.0.9
-itsdangerous>=2.2.0
+# Dependencies live next to the app; keep a single source of truth.
+-r app/requirements.txt

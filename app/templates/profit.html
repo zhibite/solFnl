@@ -28,11 +28,21 @@
 </div>
 
 <!-- 统计卡片 -->
-<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+<div class="grid grid-cols-2 md:grid-cols-7 gap-4 mb-8">
     <div class="stat-card rounded-xl p-4 card-hover">
         <div class="text-xs text-gray-400 mb-1">{{ month }} 净盈利</div>
         <div class="text-2xl font-bold {% if summary.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
             {{ "%.2f"|format(summary.realized_profit) }}</div>
+    </div>
+    <div class="stat-card rounded-xl p-4 card-hover">
+        <div class="text-xs text-gray-400 mb-1">近7天盈利</div>
+        <div class="text-2xl font-bold {% if (summary.pnl_7d or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
+            {{ "%.2f"|format(summary.pnl_7d or 0) }}</div>
+    </div>
+    <div class="stat-card rounded-xl p-4 card-hover">
+        <div class="text-xs text-gray-400 mb-1">胜率</div>
+        <div class="text-lg font-bold">{% if summary.win_rate is not none %}{{ "%.1f"|format(summary.win_rate * 100) }}%{% else %}-{% endif %}</div>
+        <div class="text-xs text-gray-500 mt-1">盈利 {{ summary.win_sells }} / 亏损 {{ summary.loss_sells }} 单</div>
     </div>
     <div class="stat-card rounded-xl p-4 card-hover">
         <div class="text-xs text-gray-400 mb-1">盈利/亏损天</div>
@@ -77,6 +87,7 @@
                     <th class="px-6 py-3 text-right">亏损额</th>
                     <th class="px-6 py-3 text-right">买入量</th>
                     <th class="px-6 py-3 text-right">卖出量</th>
+                    <th class="px-6 py-3 text-right">胜率</th>
                     <th class="px-6 py-3 text-right">买/卖笔数</th>
                 </tr>
             </thead>
@@ -90,10 +101,12 @@
                     <td class="px-6 py-3 text-right text-danger">{{ "%.2f"|format(d.losses) }}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ "%.2f"|format(d.buy_volume) }}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ "%.2f"|format(d.sell_volume) }}</td>
+                    {% set _wr_total = (d.win_sells or 0) + (d.loss_sells or 0) %}
+                    <td class="px-6 py-3 text-right text-gray-300">{% if _wr_total > 0 %}{{ "%.1f"|format((d.win_sells or 0) * 100.0 / _wr_total) }}%{% else %}-{% endif %}</td>
                     <td class="px-6 py-3 text-right text-gray-300">{{ d.buy_count }}/{{ d.sell_count }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="7" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="8" class="px-6 py-12 text-center text-gray-500">
                     该月暂无数据，请先在 <a href="/wallets" class="text-primary hover:underline font-medium">地址管理</a> 点"立即同步"
                 </td></tr>
                 {% endfor %}

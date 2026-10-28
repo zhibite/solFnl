@@ -3,3 +3,6 @@ __pycache__/
 .env
 data/
 *.db
+
+# bulk address exports (large; keep them out of git)
+docs/pool-*.json

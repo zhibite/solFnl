@@ -67,8 +67,12 @@
             <span>同步月份</span>
             <span class="font-mono font-medium text-primary">当月 + 往前 {{ months_back }} 个月</span>
         </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
+            <span>每批地址数 / 批次间隔</span>
+            <span class="font-mono font-medium text-primary">{{ batch_size }} 个 / {{ tick_seconds }} 秒</span>
+        </div>
     </div>
-    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、SYNC_MONTHS_BACK</p>
+    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、SYNC_MONTHS_BACK、SYNC_BATCH_SIZE、SYNC_TICK_SECONDS</p>
 </div>
 
 <!-- 对外 API 文档 -->
@@ -77,56 +81,131 @@
         <h2 class="font-semibold flex items-center gap-2">📡 对外 API 文档</h2>
         <p class="text-xs text-gray-400 mt-1">供第三方系统集成调用（无需登录）</p>
     </div>
+
+    <!-- 通用约定 -->
+    <div class="px-6 py-4 border-b border-gray-700/30 text-xs text-gray-400 space-y-2">
+        <p><strong class="text-gray-300">① 基础地址：</strong>所有路径都挂在 <code class="font-mono text-primary">http://&lt;主机&gt;:8038</code> 之下（端口由环境变量 <code class="font-mono">PORT</code> 决定，默认 8038）。</p>
+        <p><strong class="text-gray-300">② 鉴权：</strong>这一组接口全部开放，<span class="text-primary">不需要登录、不要带 Cookie 或 token</span>，直接请求即可。</p>
+        <p><strong class="text-gray-300">③ 请求格式：</strong>POST 接口必须带请求头 <code class="font-mono text-primary">Content-Type: application/json</code>，请求体是一个 JSON 对象；GET 接口用 query 参数传月份。</p>
+        <p><strong class="text-gray-300">④ 返回格式：</strong>统一返回 JSON，其中 <code class="font-mono text-primary">success</code> 是布尔值表示成败。失败时 HTTP 状态码仍是 200，请在 <code class="font-mono text-primary">message</code> 字段里读具体原因，不要只看状态码。</p>
+    </div>
+
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
             <thead class="bg-gray-900/30">
                 <tr>
                     <th class="text-left py-3 px-6 text-gray-400 font-medium">方法</th>
                     <th class="text-left py-3 px-6 text-gray-400 font-medium">端点</th>
-                    <th class="text-left py-3 px-6 text-gray-400 font-medium">说明</th>
+                    <th class="text-left py-3 px-6 text-gray-400 font-medium">用途</th>
+                    <th class="text-left py-3 px-6 text-gray-400 font-medium">请求参数</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-700/30">
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-green-700/50">POST</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/wallets</td>
-                    <td class="py-3 px-6 text-gray-300">新增地址（仅添加，不自动抓取）</td>
+                    <td class="py-3 px-6 text-gray-300">只把地址登记进跟踪列表，<span class="text-gray-400">不抓取</span>任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">body: <span class="text-primary">address</span> (必填) · <span class="text-primary">label</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-green-700/50">POST</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/track</td>
-                    <td class="py-3 px-6 text-gray-300">新增地址并抓取入库</td>
+                    <td class="py-3 px-6 text-gray-300">登记地址并<span class="text-primary">立即抓取</span>历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">body: <span class="text-primary">address</span> (必填) · <span class="text-primary">label</span> (可选) · <span class="text-primary">months</span> (可选, 如 ["2026-10"])</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/wallets</td>
-                    <td class="py-3 px-6 text-gray-300">地址列表</td>
+                    <td class="py-3 px-6 text-gray-300">列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">无</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/profit?month=2026-10</td>
-                    <td class="py-3 px-6 text-gray-300">全部地址月汇总</td>
+                    <td class="py-3 px-6 text-gray-300">所有<span class="text-primary">已启用</span>地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 <code class="font-mono text-xs">total_pnl</code>。不传 month 则取当月</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">query: <span class="text-primary">month</span> (可选, YYYY-MM)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/profit/&lt;address&gt;</td>
-                    <td class="py-3 px-6 text-gray-300">单地址每日明细（可加 ?month=2026-10）</td>
+                    <td class="py-3 px-6 text-gray-300">单个地址的每日明细，<code class="font-mono text-xs">days[]</code> 按天给买入卖出笔数与金额、已实现盈亏，外加 <code class="font-mono text-xs">summary</code> 汇总。传 month 取该月，不传则取最近 500 天</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">path: <span class="text-primary">&lt;address&gt;</span> · query: <span class="text-primary">month</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/profit/&lt;address&gt;?month=2026-10</td>
-                    <td class="py-3 px-6 text-gray-300">单地址盈利页（HTML，可分享）</td>
+                    <td class="py-3 px-6 text-gray-300">同一份数据的网页版，直接在浏览器打开即可查看图表，并可把链接分享给别人</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">path: <span class="text-primary">&lt;address&gt;</span> · query: <span class="text-primary">month</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/health</td>
-                    <td class="py-3 px-6 text-gray-300">健康检查</td>
+                    <td class="py-3 px-6 text-gray-300">健康检查，返回 <code class="font-mono text-xs">{"success": true, "service": "gmgndaily"}</code>，可用于探活</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">无</td>
                 </tr>
             </tbody>
         </table>
     </div>
-    <div class="bg-gray-900/30 px-6 py-4 border-t border-gray-700/30 text-xs text-gray-400">
-        💡 <strong>说明：</strong> 所有 API 无需登录即可调用。POST /api/wallets 和 /api/track 的区别：前者仅添加地址到跟踪列表，后者立即抓取数据并入库。
+
+    <!-- 请求参数详解 -->
+    <div class="px-6 py-4 border-t border-gray-700/30 text-xs text-gray-400">
+        <p class="font-semibold text-gray-300 mb-2">📌 请求参数详解（两个 POST 接口通用）</p>
+        <ul class="space-y-1 list-disc list-inside">
+            <li><code class="font-mono text-primary">address</code> <span class="text-danger">（必填）</span> — Solana 地址，base58 编码、32–44 个字符。缺失或为空报 <code class="font-mono">address required</code>，格式不对报 <code class="font-mono">invalid solana address</code>。</li>
+            <li><code class="font-mono text-primary">label</code> <span class="text-gray-500">（可选）</span> — 这个地址的备注名，例如「聪明钱01」，会显示在网页和汇总里。不传则保留已有备注（新地址为空）。</li>
+            <li><code class="font-mono text-primary">months</code> <span class="text-gray-500">（仅 /api/track，可选）</span> — 要抓哪几个月，数组，元素形如 <code class="font-mono">"2026-10"</code>。不传则按系统配置抓当月 + 往前 N 个月。</li>
+        </ul>
+    </div>
+
+    <!-- 调用示例 -->
+    <div class="px-6 py-4 border-t border-gray-700/30 text-xs text-gray-400">
+        <div class="flex items-center justify-between mb-2">
+            <p class="font-semibold text-gray-300">🧪 调用示例（curl）</p>
+            <button onclick="copyCurl()" id="curlCopyBtn" class="text-xs px-2.5 py-1 rounded-lg border border-gray-700/50 hover:bg-gray-800/30 transition">📋 复制全部</button>
+        </div>
+        <pre id="curlSample" class="bg-gray-900/50 rounded-lg p-3 font-mono text-xs text-gray-300 overflow-x-auto"><span class="text-gray-500"># 1) 登记地址，不抓数据</span>
+curl -X POST http://127.0.0.1:8038/api/wallets \
+  -H <span class="text-green-300">"Content-Type: application/json"</span> \
+  -d <span class="text-primary">'{&#34;address&#34;:&#34;Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN&#34;,&#34;label&#34;:&#34;聪明钱01&#34;}'</span>
+
+<span class="text-gray-500"># 2) 登记地址 + 立即抓取入库</span>
+curl -X POST http://127.0.0.1:8038/api/track \
+  -H <span class="text-green-300">"Content-Type: application/json"</span> \
+  -d <span class="text-primary">'{&#34;address&#34;:&#34;Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN&#34;,&#34;label&#34;:&#34;聪明钱01&#34;,&#34;months&#34;:[&#34;2026-10&#34;]}'</span>
+
+<span class="text-gray-500"># 3) 查看地址列表</span>
+curl http://127.0.0.1:8038/api/wallets
+
+<span class="text-gray-500"># 4) 全部地址当月汇总 / 单地址每日明细</span>
+curl <span class="text-primary">"http://127.0.0.1:8038/api/profit?month=2026-10"</span>
+curl <span class="text-primary">"http://127.0.0.1:8038/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"</span>
+
+<span class="text-gray-500"># 5) 健康检查</span>
+curl http://127.0.0.1:8038/api/health</pre>
+    </div>
+
+    <!-- 返回示例 + 错误 -->
+    <div class="px-6 py-4 border-t border-gray-700/30 text-xs text-gray-400 space-y-3">
+        <div>
+            <p class="font-semibold text-gray-300 mb-2">📤 返回示例</p>
+            <ul class="space-y-1 list-disc list-inside">
+                <li><code class="font-mono">POST /api/wallets</code> → <code class="font-mono text-primary">{"success": true, "wallet": {"address": "...", "label": "...", "enabled": 1, "created_at": "...", "updated_at": "..."}}</code></li>
+                <li><code class="font-mono">POST /api/track</code> → <code class="font-mono text-primary">{"success": true, "wallet": "...", "added": true, "months": ["2026-10"], "results": [{"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}], "summary": {...}, "profit_url": "/profit/...?month=2026-10"}</code>，其中 <code class="font-mono">added</code> 表示这次是不是新加的地址，<code class="font-mono">results</code> 是每月抓取结果。全部月份失败时 <code class="font-mono">success</code> 为 false。</li>
+                <li><code class="font-mono">GET /api/profit</code> → <code class="font-mono text-primary">{"success": true, "month": "2026-10", "total_pnl": 1234.5, "wallets": [...]}</code></li>
+                <li><code class="font-mono">GET /api/profit/&lt;address&gt;</code> → <code class="font-mono text-primary">{"success": true, "wallet": "...", "month": "2026-10", "summary": {...}, "days": [...]}</code>，<code class="font-mono">days[]</code> 每项对应一天的记录。</li>
+            </ul>
+        </div>
+        <div>
+            <p class="font-semibold text-gray-300 mb-2">⚠️ 常见错误（success 为 false，看 message）</p>
+            <ul class="space-y-1 list-disc list-inside">
+                <li><code class="font-mono">address required</code> — body 里没有 <code class="font-mono">address</code> 或值为空。</li>
+                <li><code class="font-mono">invalid solana address</code> — 地址不是合法的 Solana 地址（长度或字符集不对）。</li>
+                <li><code class="font-mono">body must be JSON</code> — 没带 <code class="font-mono">Content-Type: application/json</code>，或 body 不是合法 JSON。</li>
+                <li><code class="font-mono">months must be a list of YYYY-MM strings</code> — <code class="font-mono">months</code> 传了空数组、不是数组，或元素不是合法的 <code class="font-mono">YYYY-MM</code>。</li>
+                <li><code class="font-mono">wallet saved but sync failed: ...</code> — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 <code class="font-mono">/api/track</code> 或等定时任务重试。</li>
+            </ul>
+        </div>
+        <p class="pt-1 border-t border-gray-700/30">💡 <strong>怎么选：</strong>只想批量加地址选 <code class="font-mono text-primary">/api/wallets</code>（瞬间返回）；想加完马上拿到数据选 <code class="font-mono text-primary">/api/track</code>（会等待抓取完成）。拿到数据后用 <code class="font-mono text-primary">/api/profit</code> 系列读结果。</p>
     </div>
 </div>
 {% endblock %}
@@ -191,5 +270,17 @@ async function saveSession() {
 
 // 页面加载时读取配置
 document.addEventListener('DOMContentLoaded', loadSourceConfig);
+
+function copyCurl() {
+    const btn = document.getElementById('curlCopyBtn');
+    const text = document.getElementById('curlSample').innerText;
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = '✓ 已复制';
+        setTimeout(() => { btn.textContent = '📋 复制全部'; }, 1500);
+    }).catch(() => {
+        btn.textContent = '✗ 复制失败';
+        setTimeout(() => { btn.textContent = '📋 复制全部'; }, 1500);
+    });
+}
 </script>
 {% endblock %}

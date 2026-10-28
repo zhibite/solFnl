@@ -141,7 +141,7 @@
         <h2 class="font-semibold mb-3">📜 同步日志（最近 30 条）</h2>
         <div class="text-xs px-3 py-2 rounded-lg bg-gray-900/30 text-gray-300 border border-gray-700/30">
             {% if sync_state.running %}
-                🔄 同步进行中…
+                🔄 同步进行中…{% if sync_state.progress and sync_state.progress.total %} {{ sync_state.progress.done }}/{{ sync_state.progress.total }}{% endif %}
             {% elif sync_state.last_run %}
                 ✓ 上次同步：{{ sync_state.last_run }}
             {% else %}
@@ -235,7 +235,9 @@ async function importJson() {
         }
         const r = await post('/api/wallets/import', {wallets: items});
         if (!r) return;
-        msg.textContent = r.success ? `✓ 导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 失败：' + r.message);
+        msg.textContent = r.success
+            ? `✓ 导入成功：新增 ${r.added}，更新 ${r.updated || 0}，跳过 ${r.skipped || 0}，非法 ${r.invalid || 0}`
+            : ('✗ 失败：' + r.message);
         msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
         if (r.success) setTimeout(() => location.reload(), 800);
     } catch (e) { msg.textContent = '✗ JSON 格式错误：' + e.message; msg.className = 'text-xs mt-3 text-danger'; }
@@ -252,7 +254,9 @@ async function importFile() {
     try {
         const res = await fetch('/api/wallets/import_file', {method: 'POST', body: fd});
         const r = await res.json();
-        msg.textContent = r.success ? `✓ 文件导入成功：新增 ${r.added}，跳过 ${r.skipped}` : ('✗ 文件导入失败：' + r.message);
+        msg.textContent = r.success
+            ? `✓ 文件导入成功：新增 ${r.added}，更新 ${r.updated || 0}，跳过 ${r.skipped || 0}，非法 ${r.invalid || 0}`
+            : ('✗ 文件导入失败：' + r.message);
         msg.className = 'text-xs mt-3 ' + (r.success ? 'text-success' : 'text-danger');
         if (r.success) setTimeout(() => location.reload(), 800);
     } catch (e) {
@@ -264,11 +268,15 @@ async function importFile() {
 }
 async function syncNow() {
     const msg = document.getElementById('importMsg') || (() => {const el = document.createElement('p'); el.id = 'importMsg'; document.body.appendChild(el); return el;})();
-    msg.textContent = '🔄 同步进行中，请稍候…';
+    msg.textContent = '🔄 正在启动后台同步…';
     const r = await post('/api/sync/now', {});
     if (!r) return;
-    msg.textContent = r.success ? `✓ 同步完成：${r.wallets} 个地址` : ('✗ 失败：' + (r.message || '未知'));
-    if (r.success) setTimeout(() => location.reload(), 1000);
+    if (r.success) {
+        msg.textContent = `✓ 已在后台开始同步 ${r.wallets} 个地址（${(r.months || []).join(', ')}），可稍后刷新查看进度`;
+        setTimeout(() => location.reload(), 1500);
+    } else {
+        msg.textContent = '✗ 失败：' + (r.message || '未知');
+    }
 }
 </script>
 {% endblock %}

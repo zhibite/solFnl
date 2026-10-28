@@ -72,6 +72,7 @@ class DebotClient:
         Returns list of day dicts, fields mirror docs/debot.md:
         date, buy_count, sell_count, buy_volume, sell_volume,
         realized_profit, gains, losses, last_trade_time.
+        win_sells/loss_sells 固定为 0 (Debot 无此字段, 胜率仅 GMGN 可用).
         """
         data = self._get(CALENDAR_PATH, {
             "chain": self.chain,
@@ -91,6 +92,8 @@ class DebotClient:
                 "realized_profit": float(d.get("realized_profit", 0.0)),
                 "gains": float(d.get("gains", 0.0)),
                 "losses": float(d.get("losses", 0.0)),
+                "win_sells": 0,  # Debot 无此字段
+                "loss_sells": 0,  # Debot 无此字段
                 "last_trade_time": int(d.get("last_trade_time", 0)),
             })
         return out

@@ -1,0 +1,3 @@
+-r app/requirements.txt
+# Only needed by app/verify_flow.py (in-process ASGI smoke test)
+httpx>=0.27
