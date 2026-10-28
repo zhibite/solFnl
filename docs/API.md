@@ -192,12 +192,14 @@ print(r.json())
     "loss_sells": 12,
     "win_rate": 0.7142857142857143,
     "pnl_7d": 320.0,
+    "today_pnl": 45.6,
     "updated_at": "2026-10-28T12:13:50.287281+00:00"
   } ]
 }
 ```
 
 每个钱包行是该地址该月的汇总；`buy_volume` / `sell_volume` / `transfer_*` 都是当月合计。
+`today_pnl` 是当前 UTC 自然日的已实现盈亏（最近一次同步时的值），与 `month` 参数无关。
 
 **`GET /api/profit/<address>`**
 

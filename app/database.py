@@ -451,6 +451,9 @@ class Database:
         """One SQL: per-wallet month aggregates + label/enabled, paged."""
         start, end = self._month_range(month)
         cutoff_7d = _recent_cutoff(7)
+        today_start = int(datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp())
+        today_end = today_start + 86399
         with self._conn() as conn:
             cols = {r["name"] for r in conn.execute(
                 "PRAGMA table_info(daily_profit)").fetchall()}
@@ -479,6 +482,11 @@ class Database:
                            WHERE d7.wallet = w.address AND d7.date >= ?
                        ), 0) AS pnl_7d,
                        COALESCE((
+                           SELECT SUM(d6.realized_profit) FROM daily_profit d6
+                           WHERE d6.wallet = w.address
+                             AND d6.date >= ? AND d6.date <= ?
+                       ), 0) AS today_pnl,
+                       COALESCE((
                            SELECT MAX(s.updated_at) FROM sync_state s
                            WHERE s.wallet = w.address
                        ), (
@@ -492,7 +500,8 @@ class Database:
                 GROUP BY w.address
                 ORDER BY w.created_at
                 LIMIT ? OFFSET ?
-            """, (cutoff_7d, start, end, limit, offset)).fetchall()
+            """, (cutoff_7d, today_start, today_end, start, end,
+                  limit, offset)).fetchall()
             out = []
             for r in rows:
                 row = dict(r)

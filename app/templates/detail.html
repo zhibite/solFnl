@@ -64,15 +64,15 @@
             <thead class="bg-gray-900/30">
                 <tr class="text-left text-gray-400 border-b border-gray-700/30">
                     <th class="px-6 py-3">日期</th>
-                    <th class="px-6 py-3 text-right">盈利</th>
-                    <th class="px-6 py-3 text-right">盈利额</th>
-                    <th class="px-6 py-3 text-right">亏损额</th>
-                    <th class="px-6 py-3 text-right">买入量</th>
-                    <th class="px-6 py-3 text-right">卖出量</th>
-                    <th class="px-6 py-3 text-right">转入</th>
-                    <th class="px-6 py-3 text-right">转出</th>
-                    <th class="px-6 py-3 text-right">胜率</th>
-                    <th class="px-6 py-3 text-right">买/卖笔数</th>
+                    <th class="px-6 py-3 text-right" title="当日已实现净盈亏 = 盈利合计 + 亏损合计">当日净盈利</th>
+                    <th class="px-6 py-3 text-right" title="当日盈利卖出（win_profit）的合计">盈利合计</th>
+                    <th class="px-6 py-3 text-right" title="当日亏损卖出（loss_profit）的合计，显示为负数">亏损合计</th>
+                    <th class="px-6 py-3 text-right" title="当日买入金额（USD）">买入额(USD)</th>
+                    <th class="px-6 py-3 text-right" title="当日卖出金额（USD）">卖出额(USD)</th>
+                    <th class="px-6 py-3 text-right" title="当日转入金额（USD）/ 笔数">转入</th>
+                    <th class="px-6 py-3 text-right" title="当日转出金额（USD）/ 笔数">转出</th>
+                    <th class="px-6 py-3 text-right" title="当日盈利单数 / (盈利单数 + 亏损单数)">当日胜率</th>
+                    <th class="px-6 py-3 text-right" title="当日买入 / 卖出笔数">买/卖笔数</th>
                 </tr>
             </thead>
             <tbody>

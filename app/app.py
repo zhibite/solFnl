@@ -17,7 +17,7 @@ import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -168,9 +168,29 @@ def _fmt_money(value: Any, digits: int = 2) -> str:
         return str(value)
 
 
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _to_beijing(value: Any, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Render a UTC ISO timestamp / unix seconds as Beijing time (UTC+8)."""
+    try:
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(int(value), tz=timezone.utc)
+        elif isinstance(value, datetime):
+            dt = value
+        else:
+            dt = datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_BEIJING_TZ).strftime(fmt)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 templates.env.filters["timestamp_to_date"] = _ts_to_date
 templates.env.filters["money"] = lambda v: _fmt_money(v, 2)
 templates.env.filters["money0"] = lambda v: _fmt_money(v, 0)
+templates.env.filters["beijing_time"] = _to_beijing
 
 
 def _source_manager() -> ProfitSourceManager:

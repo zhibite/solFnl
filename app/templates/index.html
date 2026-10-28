@@ -55,28 +55,33 @@
 
 <!-- 主表格 -->
 <div class="bg-gray-800/30 rounded-xl border border-gray-700/50 overflow-hidden card-hover">
-    <div class="bg-gradient-to-r from-gray-800/50 to-gray-900/50 px-6 py-4 border-b border-gray-700/30 flex justify-between items-center">
-        <h2 class="font-semibold">地址盈利汇总</h2>
-        {% if pagination.total > 0 %}
-        <span class="text-xs text-gray-400">共 {{ pagination.total }} 个地址，第 {{ pagination.page }}/{{ pagination.total_pages }} 页</span>
-        {% endif %}
+    <div class="bg-gradient-to-r from-gray-800/50 to-gray-900/50 px-6 py-4 border-b border-gray-700/30">
+        <div class="flex justify-between items-center">
+            <h2 class="font-semibold">地址盈利汇总</h2>
+            {% if pagination.total > 0 %}
+            <span class="text-xs text-gray-400">共 {{ pagination.total }} 个地址，第 {{ pagination.page }}/{{ pagination.total_pages }} 页</span>
+            {% endif %}
+        </div>
+        <p class="text-xs text-gray-400 mt-2">
+            下表为 <span class="text-gray-200 font-medium">{{ month }}</span> 月度汇总（不是单日数据）：
+            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；近7天净盈利为按当前时间滚动的 7 天窗口；
+            本月净盈利 = 盈利合计 + 亏损合计。
+        </p>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
             <thead>
                 <tr class="text-left text-gray-400 border-b border-gray-700/30 bg-gray-900/30">
                     <th class="px-6 py-3">地址</th>
-                    <th class="px-6 py-3">备注</th>
-                    <th class="px-6 py-3 text-right">天数</th>
-                    <th class="px-6 py-3 text-right">盈利</th>
-                    <th class="px-6 py-3 text-right">近7天盈利</th>
-                    <th class="px-6 py-3 text-right">盈利额</th>
-                    <th class="px-6 py-3 text-right">亏损额</th>
-                    <th class="px-6 py-3 text-right">胜率</th>
-                    <th class="px-6 py-3 text-right">买/卖笔数</th>
-                    <th class="px-6 py-3 text-right">买入/卖出额</th>
-                    <th class="px-6 py-3 text-right">转入/转出</th>
-                    <th class="px-6 py-3 text-right">最近同步</th>
+                    <th class="px-6 py-3 text-right" title="当月有数据的天数">交易天数</th>
+                    <th class="px-6 py-3 text-right" title="当前 UTC 自然日（00:00–23:59 UTC）的已实现盈亏，最近一次同步时的值">今日盈利(UTC)</th>
+                    <th class="px-6 py-3 text-right" title="按当前时间往前滚动 7 天的净盈亏，与所选月份无关">近7天净盈利</th>
+                    <th class="px-6 py-3 text-right" title="所选月份的净盈亏 = 盈利合计 + 亏损合计">本月净盈利</th>
+                    <th class="px-6 py-3 text-right" title="当月盈利单数 / (盈利单数 + 亏损单数)">月度胜率</th>
+                    <th class="px-6 py-3 text-right" title="当月买入 / 卖出笔数">当月买/卖笔数</th>
+                    <th class="px-6 py-3 text-right" title="当月买入 / 卖出金额合计（USD）">买入/卖出额(USD)</th>
+                    <th class="px-6 py-3 text-right" title="当月转入 / 转出金额合计（USD），括号内为笔数">转入/转出(USD)</th>
+                    <th class="px-6 py-3 text-right" title="最近一次同步尝试时间（北京时间）">最近同步（北京）</th>
                     <th class="px-6 py-3">状态</th>
                     <th class="px-6 py-3">更新</th>
                 </tr>
@@ -89,14 +94,14 @@
                             {{ r.wallet[:6] }}…{{ r.wallet[-4:] }}
                         </a>
                     </td>
-                    <td class="px-6 py-4 text-gray-300">{{ r.label if r.label else '-' }}</td>
                     <td class="px-6 py-4 text-right">{{ r.days }}</td>
+                    <td class="px-6 py-4 text-right font-bold {% if (r.today_pnl or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
+                        {{ (r.today_pnl or 0)|money }}
+                    </td>
+                    <td class="px-6 py-4 text-right font-bold">{{ (r.pnl_7d or 0)|money }}</td>
                     <td class="px-6 py-4 text-right font-bold {% if r.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ r.realized_profit|money }}
                     </td>
-                    <td class="px-6 py-4 text-right font-bold">{{ (r.pnl_7d or 0)|money }}</td>
-                    <td class="px-6 py-4 text-right text-success">{{ r.gains|money }}</td>
-                    <td class="px-6 py-4 text-right text-danger">{{ r.losses|money }}</td>
                     <td class="px-6 py-4 text-right text-gray-300">
                         {% if r.win_rate is not none %}{{ "%.1f"|format(r.win_rate * 100) }}%{% else %}-{% endif %}
                         <div class="text-xs text-gray-500">{{ r.win_sells }}/{{ r.loss_sells }} 单</div>
@@ -110,7 +115,7 @@
                         <div>入 {{ r.transfer_in_amount_usd|money }} <span class="text-gray-500">({{ r.transfer_in_count }})</span></div>
                         <div>出 {{ r.transfer_out_amount_usd|money }} <span class="text-gray-500">({{ r.transfer_out_count }})</span></div>
                     </td>
-                    <td class="px-6 py-4 text-right text-gray-400 text-xs">{{ r.updated_at[:19] if r.updated_at else '-' }}</td>
+                    <td class="px-6 py-4 text-right text-gray-400 text-xs">{{ r.updated_at|beijing_time if r.updated_at else '-' }}</td>
                     <td class="px-6 py-4">
                         {% if r.enabled %}<span class="inline-block px-2 py-1 rounded-full bg-success/20 text-success text-xs">✓ 同步中</span>
                         {% else %}<span class="inline-block px-2 py-1 rounded-full bg-gray-700/50 text-gray-400 text-xs">已停用</span>{% endif %}
@@ -120,7 +125,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="14" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="12" class="px-6 py-12 text-center text-gray-500">
                     还没有地址，去 <a href="/wallets" class="text-primary hover:underline font-medium">地址管理</a> 导入吧 →
                 </td></tr>
                 {% endfor %}
