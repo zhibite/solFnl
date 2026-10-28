@@ -24,7 +24,14 @@ class Database:
     def __init__(self, db_path: Optional[str] = None):
         import os
         self.db_path = db_path or os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError as e:
+            raise PermissionError(
+                f"cannot create database directory "
+                f"{Path(self.db_path).parent}: {e}. "
+                f"Check the /data volume mount ownership."
+            ) from e
         self._init_db()
 
     @contextmanager
