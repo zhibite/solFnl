@@ -8,7 +8,7 @@
 只有一个：
 
 ```http
-POST https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits?tz_name=Asia/Shanghai&tz_offset=28800
+POST https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 Content-Type: application/json
 User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
 Accept: application/json, text/plain, */*
@@ -25,7 +25,7 @@ Origin: https://gmgn.ai
 curl 等价写法：
 
 ```bash
-curl -X POST 'https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits?tz_name=Asia/Shanghai&tz_offset=28800' \
+curl -X POST 'https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits' \
   -H 'Content-Type: application/json' \
   -H 'Referer: https://gmgn.ai/' \
   -H 'Origin: https://gmgn.ai' \
@@ -109,7 +109,7 @@ https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 
 | GMGN 字段 | 含义 | 入库列 |
 |---|---|---|
-| `date` | 日期标签（北京自然日编码为 UTC 零点） | `daily_profit.date` |
+| `date` | unix 秒，UTC 零点 | `daily_profit.date` |
 | `total_profit` | 当日已实现盈亏（字符串） | `realized_profit` |
 | `total_buys` / `total_sells` | 买入 / 卖出笔数 | `buy_count` / `sell_count` |
 | `total_transfer_ins` / `total_transfer_outs` | 转入 / 转出笔数 | `transfer_in_count` / `transfer_out_count` |
@@ -120,12 +120,9 @@ https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 
 补充说明：
 
-- `date` 是**日期标签**：行内的 `2026-10-29` 表示北京时间 10-29 00:00–23:59，时间戳编码为该日期的 UTC 零点。
-  每日分桶由 query 的 `tz_name` / `tz_offset` 决定（GMGN 网页同样传 `Asia/Shanghai` + `28800`），
-  客户端在 `gmgn_client.py` 里固定带上这两个参数（可用 `GMGN_TZ_NAME` / `GMGN_TZ_OFFSET` 覆盖）。
-  数据库按月查询仍用日期标签的 UTC 边界。
-- 从 UTC 分桶切到北京分桶时，当前月 + 前 `SYNC_MONTHS_BACK` 个月的数据会在各钱包下次同步时被覆盖；
-  更早月份不会自动重刷，仍保留 UTC 分桶（历史数据如需统一，需手动重同步）。
+- `date` 是 **UTC 零点**，不是 Asia/Shanghai 零点；数据库按月查询也统一按 UTC 边界。
+- 实测 query/body 里的 `tz_name` / `tz_offset` 对日线分桶没有影响（2026-10-29 验证），
+  因此「今日盈利」只能按 UTC 自然日口径展示。
 - 金额字段原样是字符串，入库时转成 SQLite `REAL`；展示到美分足够，若要做精确对账需要保留原始字符串。
 - 响应里没有钱包地址字段，所以必须一个钱包一个请求。
 - `daily_profit` 表里还有一列 `last_trade_time`（Debot 遗留），GMGN 源固定写 `0`。

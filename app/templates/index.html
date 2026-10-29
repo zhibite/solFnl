@@ -72,7 +72,7 @@
         </div>
         <p class="text-xs text-gray-400 mt-2">
             下表为 <span class="text-gray-200 font-medium">{{ month }}</span> 月度汇总（不是单日数据）：
-            今日盈利(北京) 为当前北京时间自然日（00:00–23:59 UTC+8）的已实现盈亏，随同步更新；7D盈利、被追踪/被备注直接来自 GMGN 公开接口；
+            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；7D盈利、被追踪/被备注直接来自 GMGN 公开接口；
             本月净盈利 = 盈利合计 + 亏损合计。评分按最近 {{ score_window }} 天综合计算，不随月份选择变化。
         </p>
     </div>
@@ -83,7 +83,7 @@
                     <th class="px-6 py-3">地址</th>
                     <th class="px-6 py-3 text-right" title="综合评分 0-100：盈利30 + 胜率20 + 稳定20 + 社交15 + 风险15">评分</th>
                     <th class="px-6 py-3 text-right" title="当月有数据的天数">交易天数</th>
-                    <th class="px-6 py-3 text-right" title="当前北京时间自然日（00:00–23:59 UTC+8）的已实现盈亏，最近一次同步时的值">今日盈利(北京)</th>
+                    <th class="px-6 py-3 text-right" title="当前 UTC 自然日（00:00–23:59 UTC）的已实现盈亏，最近一次同步时的值">今日盈利(UTC)</th>
                     <th class="px-6 py-3 text-right" title="优先显示 GMGN smartmoney 公开接口的 realized_profit_7d（USD）；未抓取到时回退为本地日汇总的近 7 天盈利">7D盈利(GMGN)</th>
                     <th class="px-6 py-3 text-right" title="所选月份的净盈亏 = 盈利合计 + 亏损合计">本月净盈利</th>
                     <th class="px-6 py-3 text-right" title="当月盈利单数 / (盈利单数 + 亏损单数)">月度胜率</th>

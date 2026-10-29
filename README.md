@@ -180,12 +180,12 @@ curl https://fnl.bquant.com/api/health
   数据直接来自 GMGN 公开接口，未抓取到时 `meta` 为 `null`；完整字段见 [docs/API.md](./docs/API.md)。
   注意：API 行内的 `pnl_7d` 是本地按日汇总；GMGN 的 7D 统计在 `meta.realized_profit_7d`（USD）和 `meta.pnl_7d`（收益率）。
 - 钱包相关的返回同时带 `score`：`value`（0-100）、`grade`、`window_days`、`meta_available`、`components`（五项得分）、`metrics`（原始指标）、`updated_at`。
-- `summary.today_pnl` 是当前北京时间自然日（UTC+8）的已实现盈亏，单地址、批量查询和 `/api/track` 都会返回。
+- `summary.today_pnl` 是当前 UTC 自然日的已实现盈亏，单地址、批量查询和 `/api/track` 都会返回。
 
 单地址的 `days[]` 每个元素按 GMGN 每日记录存储，字段为：
 `wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`
 （字段与 GMGN 原始字段的对应关系见 [gmgn_client.py](app/gmgn_client.py) 的 `normalize()`；
-`date` 为日期标签：该天北京时间自然日的日期编码成 UTC 零点时间戳，GMGN 源没有 `last_trade_time`，该字段固定为 0）。
+`date` 为 UTC 秒级时间戳，GMGN 源没有 `last_trade_time`，该字段固定为 0）。
 
 ### 常见错误（success 为 false，看 message）
 
@@ -237,8 +237,6 @@ docs/debot.md       # Debot 抓包样本（历史参考）
 | `SYNC_TICK_SECONDS` | `60` | 调度队列每批之间休眠的秒数 |
 | `SYNC_BATCH_SIZE` | `180` | 每批最多处理多少个钱包（还受请求预算限制） |
 | `SYNC_MAX_REQUESTS_PER_TICK` | `180` | 每批最多发起多少个 GMGN 请求 |
-| `GMGN_TZ_NAME` | `Asia/Shanghai` | GMGN 日线按此时区的自然日分桶（今日盈利同口径） |
-| `GMGN_TZ_OFFSET` | `28800` | 上述时区的 UTC 偏移秒数（北京 +8h） |
 | `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
 | `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
 | `MAX_BATCH_WALLETS` | `500` | `/api/wallets/batch` 单次最大地址数 |

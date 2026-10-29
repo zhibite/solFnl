@@ -94,22 +94,6 @@ def _recent_cutoff(days: int = 7) -> int:
     return now - days * 86400
 
 
-#: GMGN buckets daily rows by Beijing calendar day (see gmgn_client.TZ_NAME).
-_BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _beijing_today_start(now: Optional[datetime] = None) -> int:
-    """Timestamp label of the current Beijing calendar date.
-
-    GMGN encodes each daily row's date as UTC midnight of the local
-    calendar date, so the Beijing "today" row is labelled with today's
-    date at 00:00 UTC (which may be up to 8h ahead of the current UTC time).
-    """
-    now = (now or datetime.now(timezone.utc)).astimezone(_BEIJING_TZ)
-    return int(datetime(now.year, now.month, now.day,
-                        tzinfo=timezone.utc).timestamp())
-
-
 class Database:
     def __init__(self, db_path: Optional[str] = None):
         import os
@@ -744,8 +728,10 @@ class Database:
         loss_sells = sum(int(d.get("loss_sells", 0) or 0) for d in days)
         # 近 7 天盈利: 与月份无关, 以入库日记录按滚动 7 天窗口汇总
         recent_days = self.get_recent_daily(wallet, days=7)
-        # 今日盈利: 当前北京自然日, 直接复用 recent_days 中的今天记录
-        today_start = _beijing_today_start()
+        # 今日盈利: 当前 UTC 自然日, 直接复用 recent_days 中的今天记录
+        now = datetime.now(timezone.utc)
+        today_start = int(now.replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp())
         today_end = today_start + 86399
         today_pnl = sum(d["realized_profit"] for d in recent_days
                         if today_start <= d["date"] <= today_end)
@@ -782,7 +768,8 @@ class Database:
         """One SQL: per-wallet month aggregates + label/enabled, paged."""
         start, end = self._month_range(month)
         cutoff_7d = _recent_cutoff(7)
-        today_start = _beijing_today_start()
+        today_start = int(datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp())
         today_end = today_start + 86399
         search_sql = ""
         search_params: List[Any] = []

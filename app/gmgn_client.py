@@ -8,15 +8,15 @@
 要点:
   - 是 POST, 不是 GET. 抓包里那种 `...?device_id=...` 的 URL 用 GET 打永远是 404.
   - 无需鉴权: 不带 token / 不带公共 query 参数都能拿到 code=0.
-  - 按 query 里的 tz_name/tz_offset 划分自然日 (GMGN 网页用的是
-    Asia/Shanghai)。默认请 GMGN 按北京时间分桶, 见 TZ_NAME/TZ_OFFSET.
+  - 日线固定按 UTC 自然日聚合. 实测 query/body 里的 tz_name/tz_offset
+    对分桶没有影响 (2026-10-29 验证), 不要按本地时区解读 date.
   - 时间跨度必须 < 1 年, 否则报 "time range must be less than 1 year".
   - start_at 必填, end_at 可选 (不给则取到今天).
   - **多钱包会求和合并**, 不能一次查多个地址. 要逐个钱包查.
   - 地址在响应里不带标识, 单钱包查询才安全.
 
 字段 (与 docs/gmgn-daily.md 一一对应):
-  date                    该自然日的日期标签, 编码为 UTC 零点 (日界按 TZ_NAME)
+  date                    unix 秒, UTC 零点
   total_profit            当日已实现盈亏 (字符串, 需转 float)
   total_buys / total_sells            买入 / 卖出笔数
   total_transfer_ins / _outs          转入 / 转出笔数
@@ -29,39 +29,14 @@
 """
 
 import json
-import logging
-import os
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
-
-log = logging.getLogger(__name__)
 
 BASE_URL = "https://gmgn.ai"
 DAILY_PROFITS_PATH = "/pf/api/v1/wallets/{chain}/daily_profits"
 COMMON_STAT_PATH = "/api/v1/wallet_common_stat/{chain}/{wallet}"
 SMARTMONEY_PATH = "/defi/quotation/v1/smartmoney/{chain}/wallet/{wallet}"
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-#: Daily rows are bucketed by the calendar day of this timezone (the GMGN web
-#: UI sends the same pair). Beijing by default so "today" matches the console.
-TZ_NAME = os.getenv("GMGN_TZ_NAME", "Asia/Shanghai")
-TZ_OFFSET = _env_int("GMGN_TZ_OFFSET", 28800)  # seconds east of UTC
-
-#: Diagnostics for /api/health: whether the tz query/body was accepted
-#: ("ok") or the request had to be retried without it ("fallback").
-_TZ_STATS = {"ok": 0, "fallback": 0}
-
-
-def tz_stats() -> Dict[str, int]:
-    return dict(_TZ_STATS)
 
 #: 一年秒数 — 接口硬限制: time range must be less than 1 year
 MAX_RANGE_SECONDS = 365 * 24 * 3600
@@ -224,19 +199,7 @@ class GMGNDailyClient:
         if end_at is not None:
             body["end_at"] = int(end_at)
         path = DAILY_PROFITS_PATH.format(chain=self.chain)
-        tz_query = (f"?tz_name={quote(TZ_NAME)}"
-                    f"&tz_offset={quote(str(TZ_OFFSET))}")
-        body_tz = dict(body, tz_name=TZ_NAME, tz_offset=TZ_OFFSET)
-        try:
-            data = self._post(path + tz_query, body_tz)
-            _TZ_STATS["ok"] += 1
-        except GMGNError as e:
-            # Never take the whole sync down if upstream rejects the params:
-            # retry without them and fall back to UTC day buckets.
-            _TZ_STATS["fallback"] += 1
-            log.warning("daily_profits tz params rejected (%s); "
-                        "retrying without them", e)
-            data = self._post(path, body)
+        data = self._post(path, body)
         return [normalize(d) for d in (data.get("list") or [])]
 
     def fetch_daily_many(self, wallets: List[str], start_at: int,
