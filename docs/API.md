@@ -93,7 +93,9 @@
 | `last_error` | 最近一次抓取失败原因，成功时为空字符串 |
 
 > 数据直接来自 GMGN 公开接口（`wallet_common_stat` + `smartmoney`），不是本地按日汇总。
-> 刷新间隔由 `META_SYNC_INTERVAL_MIN` 控制；没有 meta 时返回 `null`，稍后同步后会填充。
+> 单地址查询（`GET /api/profit/<address>` 和网页版）默认会实时刷新 meta（`refresh=0` 可跳过），
+> 刷新结果按 `META_LIVE_CACHE_SECONDS`（默认 60 秒）缓存；列表接口使用后台队列的缓存结果。
+> 没有 meta 时返回 `null`，稍后同步后会填充。
 
 ## 钱包评分 score（0-100）
 
@@ -104,6 +106,7 @@
   "value": 66.2,
   "grade": "B",
   "window_days": 90,
+  "meta_available": true,
   "components": {
     "profitability": {"score": 18.1, "max": 30},
     "win_rate": {"score": 10.1, "max": 20, "value": 0.5015},
@@ -132,7 +135,7 @@
 - 数据窗口：最近 `SCORE_WINDOW_DAYS` 天（默认 90）的 `daily_profit` + `wallet_meta`
 - 样本不足 30 天时，胜率和稳定分按置信度折减（最低 50%）；`metrics.calendar_confidence` 给出置信度
 - 评级：`A ≥ 80`、`B ≥ 60`、`C ≥ 40`、`D < 40`
-- `metrics.meta_available=false` 表示 meta 还没抓到，社交/风险/收益率部分暂为 0，评分是临时值
+- `meta_available=false`（`metrics.meta_available` 同值）表示 meta 还没抓到，社交/风险/收益率部分暂为 0，评分是临时值
 - 评分在钱包同步后自动重算；历史钱包由后台任务补算
 
 ---
@@ -145,7 +148,7 @@
 | POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果、钱包 `meta`、评分 `score` 和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
 | GET | `/api/wallets` | 分页列出跟踪地址及其 label、启用状态、创建时间、钱包 `meta` 和 `score`。默认/最多 100 个/页 | query: `limit` (可选, 默认 100, 最大 100) · `offset` (可选, 默认 0) |
 | GET | `/api/profit?month=2026-10` | 分页列出**已启用**地址该月汇总，每个地址一行（含 `meta` 和 `score`）；`total_pnl` 是所有启用地址合计。不传 month 则取当月 | query: `month` (可选) · `limit` (可选, 默认/最大 100) · `offset` (可选) |
-| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary` + `meta` + `score`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) |
+| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary` + `meta` + `score`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) · `refresh` (可选, 默认 1) |
 | GET | `/profit/<address>?month=2026-10` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
 | GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
 

@@ -61,6 +61,7 @@ _SCORE_SELECT = """
     sc.grade AS score_grade,
     sc.detail_json AS score_detail_json,
     sc.window_days AS score_window_days,
+    sc.meta_available AS score_meta_available,
     sc.updated_at AS score_updated_at
 """
 
@@ -218,6 +219,7 @@ class Database:
                     grade TEXT NOT NULL DEFAULT '',
                     detail_json TEXT NOT NULL DEFAULT '{}',
                     window_days INTEGER NOT NULL DEFAULT 90,
+                    meta_available INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (wallet) REFERENCES wallets(address)
                         ON DELETE CASCADE
@@ -292,6 +294,11 @@ class Database:
             if "has_data" not in meta_cols:
                 conn.execute("ALTER TABLE wallet_meta ADD COLUMN "
                              "has_data INTEGER NOT NULL DEFAULT 0")
+            score_cols = {r["name"] for r in conn.execute(
+                "PRAGMA table_info(wallet_score)").fetchall()}
+            if "meta_available" not in score_cols:
+                conn.execute("ALTER TABLE wallet_score ADD COLUMN "
+                             "meta_available INTEGER NOT NULL DEFAULT 0")
 
     # ============ wallets ============
 
@@ -469,15 +476,22 @@ class Database:
                     last_error=excluded.last_error
             """, (wallet, _now_iso(), str(error)[:500]))
 
-    def wallet_meta_due(self, wallet: str, stale_minutes: int) -> bool:
+    def list_wallets_meta_due(self, stale_minutes: int, limit: int
+                              ) -> List[str]:
         cutoff = (datetime.now(timezone.utc) - timedelta(
             minutes=max(stale_minutes, 1))).isoformat()
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT fetched_at FROM wallet_meta WHERE wallet=?",
-                (wallet,)).fetchone()
-            return (row is None or not row["fetched_at"]
-                    or row["fetched_at"] < cutoff)
+            rows = conn.execute("""
+                SELECT w.address FROM wallets w
+                LEFT JOIN wallet_meta m ON m.wallet = w.address
+                WHERE w.enabled=1
+                  AND (m.wallet IS NULL OR m.fetched_at IS NULL
+                       OR m.fetched_at < ?)
+                ORDER BY CASE WHEN m.fetched_at IS NULL THEN 0 ELSE 1 END,
+                         m.fetched_at
+                LIMIT ?
+            """, (cutoff, max(limit, 1))).fetchall()
+            return [r["address"] for r in rows]
 
     def get_wallet_meta(self, wallet: str) -> Optional[Dict[str, Any]]:
         with self._conn() as conn:
@@ -546,20 +560,25 @@ class Database:
     def upsert_wallet_score(self, wallet: str,
                             result: Dict[str, Any]) -> None:
         detail = json.dumps(result, ensure_ascii=False)
+        meta_available = 1 if (result.get("metrics") or {}).get(
+            "meta_available") else 0
         with self._conn() as conn:
             conn.execute("""
                 INSERT INTO wallet_score
-                    (wallet, score, grade, detail_json, window_days, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (wallet, score, grade, detail_json, window_days,
+                     meta_available, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(wallet) DO UPDATE SET
                     score=excluded.score,
                     grade=excluded.grade,
                     detail_json=excluded.detail_json,
                     window_days=excluded.window_days,
+                    meta_available=excluded.meta_available,
                     updated_at=excluded.updated_at
             """, (wallet, float(result.get("score") or 0),
                   str(result.get("grade") or ""), detail,
-                  int(result.get("window_days") or 90), _now_iso()))
+                  int(result.get("window_days") or 90),
+                  meta_available, _now_iso()))
 
     def get_wallet_score(self, wallet: str) -> Optional[Dict[str, Any]]:
         with self._conn() as conn:
@@ -573,6 +592,7 @@ class Database:
             "value": round(float(row["score"] or 0), 1),
             "grade": row["grade"] or "",
             "window_days": int(row["window_days"] or 90),
+            "meta_available": int(row["meta_available"] or 0),
             "components": detail.get("components") or {},
             "metrics": detail.get("metrics") or {},
             "updated_at": row["updated_at"],

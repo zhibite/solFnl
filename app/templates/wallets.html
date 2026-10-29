@@ -79,7 +79,7 @@
                     <td class="px-6 py-3 text-right">
                         {% if w.score_value is not none %}
                         <div class="text-lg font-bold {% if w.score_value >= 80 %}text-success{% elif w.score_value >= 60 %}text-primary{% elif w.score_value >= 40 %}text-warning{% else %}text-danger{% endif %}">
-                            {{ "%.1f"|format(w.score_value) }}
+                            {{ "%.1f"|format(w.score_value) }}{% if not w.score_meta_available %}<span class="text-warning text-sm" title="公开元数据尚未抓取，评分为暂定值">*</span>{% endif %}
                         </div>
                         <div class="text-xs text-gray-500">{{ w.score_grade }} · 100分制</div>
                         {% else %}<span class="text-gray-500">-</span>{% endif %}

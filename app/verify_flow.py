@@ -32,6 +32,15 @@ print("sample days:", len(days))
 db = get_db()
 wallet = "215nhcAHjQQGgwpQSJQ7zR26etbjjtVdW74NLzwEgQjP"
 db.upsert_wallet(wallet, label="test1")
+db.upsert_wallet_meta(wallet, {
+    "follow_count": 10,
+    "remark_count": 5,
+    "realized_profit_7d": 100.0,
+    "pnl_7d": 0.01,
+    "total_profit": 1000.0,
+    "total_profit_pnl": 0.1,
+    "risk": {},
+})
 n = db.upsert_days(wallet, days)
 print("upserted:", n)
 print("summary:", db.get_month_summary(wallet, "2026-09"))

@@ -9,7 +9,11 @@ Env:  DATABASE_PATH (default /data/gmgndaily.db)
       HISTORY_SYNC_INTERVAL_MIN (default 1440)
       SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 60)
       SYNC_MAX_REQUESTS_PER_TICK (default 60)
-      META_SYNC_INTERVAL_MIN (default 1440)
+      META_SYNC_INTERVAL_MIN (default 60)
+      META_TICK_SECONDS (default 30), META_BATCH_SIZE (default 20)
+      META_LIVE_CACHE_SECONDS (default 60)
+      META_LIVE_TIMEOUT_SECONDS (default 10)
+      META_LIVE_MAX_REQUESTS_PER_MINUTE (default 60)
       SCORE_WINDOW_DAYS (default 90)
       SYNC_LOG_RETENTION_DAYS (default 7), TRACK_MAX_CONCURRENT (default 4)
 """
@@ -20,6 +24,7 @@ import logging
 import os
 import secrets
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -56,7 +61,15 @@ SYNC_MAX_REQUESTS_PER_TICK = max(
     int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "60")), 1)
 SYNC_LOG_RETENTION_DAYS = max(int(os.getenv("SYNC_LOG_RETENTION_DAYS", "7")), 1)
 META_SYNC_INTERVAL_MIN = max(
-    int(os.getenv("META_SYNC_INTERVAL_MIN", "1440")), 1)
+    int(os.getenv("META_SYNC_INTERVAL_MIN", "60")), 1)
+META_TICK_SECONDS = max(int(os.getenv("META_TICK_SECONDS", "30")), 5)
+META_BATCH_SIZE = max(int(os.getenv("META_BATCH_SIZE", "20")), 1)
+META_LIVE_CACHE_SECONDS = max(
+    int(os.getenv("META_LIVE_CACHE_SECONDS", "60")), 5)
+META_LIVE_TIMEOUT_SECONDS = max(
+    int(os.getenv("META_LIVE_TIMEOUT_SECONDS", "10")), 3)
+META_LIVE_MAX_REQUESTS_PER_MINUTE = max(
+    int(os.getenv("META_LIVE_MAX_REQUESTS_PER_MINUTE", "60")), 1)
 SCORE_WINDOW_DAYS = max(int(os.getenv("SCORE_WINDOW_DAYS", "90")), 1)
 TRACK_MAX_CONCURRENT = max(int(os.getenv("TRACK_MAX_CONCURRENT", "4")), 1)
 CHAIN = os.getenv("CHAIN", "solana")
@@ -122,12 +135,13 @@ def require_login(request: Request):
 # app.router.lifespan_context after the fact is ignored in FastAPI>=0.115).
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sync_task, _score_task
+    global _sync_task, _score_task, _meta_task
     _sync_task = asyncio.create_task(_sync_loop())
     _score_task = asyncio.create_task(_score_backfill_loop())
+    _meta_task = asyncio.create_task(_meta_loop())
     log.info("[START] gmgndaily ready")
     yield
-    for task in (_sync_task, _full_sync_task, _score_task):
+    for task in (_sync_task, _full_sync_task, _score_task, _meta_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -252,6 +266,7 @@ def _pop_score(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "value": round(_as_float(raw.get("value")), 1),
         "grade": raw.get("grade") or "",
         "window_days": _as_int(raw.get("window_days")) or SCORE_WINDOW_DAYS,
+        "meta_available": bool(_as_int(raw.get("meta_available"))),
         "components": detail.get("components") or {},
         "metrics": detail.get("metrics") or {},
         "updated_at": raw.get("updated_at"),
@@ -331,6 +346,23 @@ def _limit_offset(request: Request) -> tuple[int, int]:
     return limit, max(0, offset)
 
 
+# Global burst guard for on-demand meta refreshes (public endpoints can be
+# called by anyone). Each refresh normally costs two GMGN GETs.
+_live_meta_lock = threading.Lock()
+_live_meta_hits: List[float] = []
+
+
+def _live_meta_allowed(cost: int = 2) -> bool:
+    now = time.monotonic()
+    with _live_meta_lock:
+        _live_meta_hits[:] = [t for t in _live_meta_hits
+                              if now - t < 60]
+        if len(_live_meta_hits) + cost > META_LIVE_MAX_REQUESTS_PER_MINUTE:
+            return False
+        _live_meta_hits.extend([now] * cost)
+        return True
+
+
 # ============ sync engine ============
 _sync_state: Dict[str, Any] = {
     "running": False,
@@ -342,6 +374,7 @@ _sync_state: Dict[str, Any] = {
 _sync_task: Optional[asyncio.Task] = None
 _full_sync_task: Optional[asyncio.Task] = None
 _score_task: Optional[asyncio.Task] = None
+_meta_task: Optional[asyncio.Task] = None
 
 # Bounds concurrent /api/track syncs so public callers can't spawn unbounded
 # worker threads (each call may make up to 3 upstream requests).
@@ -373,16 +406,13 @@ def recompute_wallet_score(wallet: str) -> Dict[str, Any]:
     return result
 
 
-def sync_wallet_meta(wallet: str) -> Dict[str, Any]:
+def sync_wallet_meta(wallet: str, timeout: int = 25) -> Dict[str, Any]:
     """Fetch and store public GMGN wallet stats (follow/remark + 7d)."""
     db = get_db()
     try:
-        meta = fetch_wallet_meta(wallet, chain=CHAIN)
+        meta = fetch_wallet_meta(wallet, chain=CHAIN, timeout=timeout)
         db.upsert_wallet_meta(wallet, meta)
-        partial = meta.get("last_error") or ""
-        if partial:
-            log.warning("[META] %s partial: %s", wallet[:8], partial)
-        return {"wallet": wallet, "ok": True, "partial_error": partial}
+        return {"wallet": wallet, "ok": True}
     except Exception as e:
         log.warning("[META] %s failed: %s", wallet[:8], e)
         try:
@@ -390,6 +420,55 @@ def sync_wallet_meta(wallet: str) -> Dict[str, Any]:
         except Exception:
             pass
         return {"wallet": wallet, "ok": False, "error": str(e)}
+
+
+def sync_wallet_meta_and_score(wallet: str, timeout: int = 25
+                               ) -> Dict[str, Any]:
+    """Refresh meta and immediately recompute the wallet score."""
+    result = sync_wallet_meta(wallet, timeout=timeout)
+    try:
+        result["score"] = recompute_wallet_score(wallet)
+    except Exception as e:
+        log.warning("[SCORE] %s recompute failed: %s", wallet[:8], e)
+    return result
+
+
+def ensure_wallet_meta(wallet: str,
+                       max_age_seconds: Optional[int] = None
+                       ) -> Optional[Dict[str, Any]]:
+    """Return fresh meta; fetch on demand when older than the live cache.
+
+    A recent failed snapshot is returned as-is for the cache window (so a
+    broken upstream is not retried on every request). The global rate guard
+    prevents public callers from hammering GMGN.
+    """
+    db = get_db()
+    if not db.get_wallet(wallet):
+        return None
+    max_age = (META_LIVE_CACHE_SECONDS if max_age_seconds is None
+               else max_age_seconds)
+    meta = db.get_wallet_meta(wallet)
+    fresh = False
+    if meta and meta.get("fetched_at"):
+        try:
+            age = (datetime.now(timezone.utc)
+                   - datetime.fromisoformat(meta["fetched_at"])).total_seconds()
+            fresh = 0 <= age <= max_age
+        except (TypeError, ValueError):
+            pass
+    if not fresh and _live_meta_allowed():
+        try:
+            sync_wallet_meta_and_score(wallet,
+                                       timeout=META_LIVE_TIMEOUT_SECONDS)
+        except Exception as e:
+            log.warning("[META] live %s failed: %s", wallet[:8], e)
+    meta = db.get_wallet_meta(wallet)
+    if db.get_wallet_score(wallet) is None:
+        try:
+            recompute_wallet_score(wallet)
+        except Exception as e:
+            log.warning("[SCORE] %s recompute failed: %s", wallet[:8], e)
+    return meta
 
 
 def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
@@ -419,10 +498,6 @@ def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
                               "error_code": code})
             log.warning("[SYNC] %s/%s failed: %s", wallet[:8], month, err_msg)
 
-    meta_synced = False
-    if db.wallet_meta_due(wallet, META_SYNC_INTERVAL_MIN):
-        meta_synced = bool(sync_wallet_meta(wallet).get("ok"))
-
     score = None
     try:
         score = recompute_wallet_score(wallet)
@@ -430,8 +505,7 @@ def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
         log.warning("[SCORE] %s failed: %s", wallet[:8], e)
 
     return {"wallet": wallet, "total_days": total_days, "months": per_month,
-            "meta": db.get_wallet_meta(wallet), "meta_synced": meta_synced,
-            "score": score}
+            "meta": db.get_wallet_meta(wallet), "score": score}
 
 
 def _session_expired(result: Dict[str, Any]) -> bool:
@@ -455,7 +529,6 @@ def _summarize_results(results: List[Dict[str, Any]], months: List[str],
         "failed": len(results) - ok_wallets,
         "total_days": sum(r.get("total_days", 0) for r in results),
         "requests": sum(len(r.get("months", [])) for r in results),
-        "meta_updated": sum(1 for r in results if r.get("meta_synced")),
         "scored": sum(1 for r in results if r.get("score")),
         "session_expired": session_expired,
         "errors": errors,
@@ -544,7 +617,7 @@ def sync_due_batch(limit: Optional[int] = None) -> Dict[str, Any]:
     targets = _trim_targets_by_budget(targets, SYNC_MAX_REQUESTS_PER_TICK)
     if not targets:
         return {"months": months, "wallets": 0, "ok": 0, "failed": 0,
-                "total_days": 0, "requests": 0, "meta_updated": 0,
+                "total_days": 0, "requests": 0,
                 "scored": 0, "session_expired": False, "errors": []}
     summary = _sync_wallet_list(targets, months)
     _sync_state["last_run"] = datetime.now(timezone.utc).isoformat()
@@ -594,7 +667,7 @@ async def _score_backfill_loop():
     while True:
         try:
             addresses = await asyncio.to_thread(
-                get_db().list_wallets_missing_score, 200)
+                get_db().list_wallets_missing_score, 500)
             if not addresses:
                 await asyncio.sleep(3600)
                 continue
@@ -604,12 +677,36 @@ async def _score_backfill_loop():
                 except Exception as e:
                     log.warning("[SCORE] %s failed: %s", address[:8], e)
             log.info("[SCORE] backfilled %d wallets", len(addresses))
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise
         except Exception as e:
             log.exception("[SCORE] backfill error: %s", e)
             await asyncio.sleep(60)
+
+
+async def _meta_loop():
+    """Refresh follow/remark + 7d metadata independently of profit sync."""
+    log.info("[META] queue start tick=%ss batch=%d stale=%dmin",
+             META_TICK_SECONDS, META_BATCH_SIZE, META_SYNC_INTERVAL_MIN)
+    while True:
+        try:
+            addresses = await asyncio.to_thread(
+                get_db().list_wallets_meta_due,
+                META_SYNC_INTERVAL_MIN, META_BATCH_SIZE)
+            if addresses:
+                for address in addresses:
+                    try:
+                        await asyncio.to_thread(
+                            sync_wallet_meta_and_score, address, 25)
+                    except Exception as e:
+                        log.warning("[META] %s failed: %s", address[:8], e)
+                log.info("[META] batch done: %d", len(addresses))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception("[META] queue error: %s", e)
+        await asyncio.sleep(META_TICK_SECONDS)
 
 
 def _safe_next(next_url: str) -> str:
@@ -695,6 +792,7 @@ def wallets_page(request: Request):
 def wallet_detail(request: Request, address: str):
     db = get_db()
     month = _month_param(request)
+    ensure_wallet_meta(address)
     days = [dict(d) for d in db.get_daily(address, month)]
     summary = db.get_month_summary(address, month)
     wallet = db.get_wallet(address) or {}
@@ -718,6 +816,7 @@ def profit_page(request: Request, address: str):
     """Standalone public profit page for one address (shareable, no login)."""
     db = get_db()
     month = _month_param(request)
+    ensure_wallet_meta(address)
     days = [dict(d) for d in db.get_daily(address, month)]
     summary = db.get_month_summary(address, month)
     wallet = db.get_wallet(address) or {}
@@ -762,6 +861,9 @@ def config_page(request: Request):
         "interval": SYNC_INTERVAL_MIN,
         "history_interval": HISTORY_SYNC_INTERVAL_MIN,
         "meta_interval": META_SYNC_INTERVAL_MIN,
+        "meta_tick": META_TICK_SECONDS,
+        "meta_batch": META_BATCH_SIZE,
+        "meta_live_cache": META_LIVE_CACHE_SECONDS,
         "score_window": SCORE_WINDOW_DAYS,
         "months_back": SYNC_MONTHS_BACK,
         "batch_size": SYNC_BATCH_SIZE,
@@ -1004,6 +1106,15 @@ async def api_sync_wallet(request: Request):
     except Exception as e:
         log.warning("[SYNC-ONE] %s failed: %s", address[:10], e)
         return {"success": False, "message": str(e)}
+    # Manual refresh also refreshes follow/remark/7d + score immediately.
+    try:
+        await asyncio.to_thread(sync_wallet_meta_and_score, address,
+                                META_LIVE_TIMEOUT_SECONDS)
+        res["meta"] = db.get_wallet_meta(address)
+        res["score"] = db.get_wallet_score(address)
+    except Exception as e:
+        log.warning("[SYNC-ONE] %s meta refresh failed: %s",
+                    address[:10], e)
     ok_months = [m for m in res["months"] if "error" not in m]
     if not ok_months:
         return {"success": False, "message": "sync failed",
@@ -1078,6 +1189,16 @@ async def api_track(request: Request):
         async with _track_lock:
             _track_inflight -= 1
 
+    # New addresses should return fresh follow/remark/7d data immediately.
+    try:
+        await asyncio.to_thread(sync_wallet_meta_and_score, address,
+                                META_LIVE_TIMEOUT_SECONDS)
+        res["meta"] = db.get_wallet_meta(address)
+        res["score"] = db.get_wallet_score(address)
+    except Exception as e:
+        log.warning("[TRACK] %s meta refresh failed: %s",
+                    address[:10], e)
+
     ok_months = [m for m in res["months"] if "error" not in m]
     if not ok_months:
         errs = "; ".join(f"{m['month']}: {m['error']}"
@@ -1101,7 +1222,8 @@ async def api_track(request: Request):
 
 
 @app.get("/api/profit/{address}")
-def api_profit(address: str, month: Optional[str] = None):
+def api_profit(address: str, month: Optional[str] = None,
+               refresh: bool = True):
     """Daily profit rows of one wallet. month='YYYY-MM' optional.
 
     状态返回（HTTP 均为 200，用 status 字段区分）：
@@ -1147,6 +1269,10 @@ def api_profit(address: str, month: Optional[str] = None):
                     "description": "登记该地址并立即抓取历史盈利数据",
                 },
             }
+
+        # 单地址查询默认拉一次最新的关注/备注/7D 数据（60 秒缓存）
+        if refresh:
+            ensure_wallet_meta(address)
 
         # 查询日常数据
         days = db.get_daily(address, month)
