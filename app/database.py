@@ -720,6 +720,13 @@ class Database:
         loss_sells = sum(int(d.get("loss_sells", 0) or 0) for d in days)
         # 近 7 天盈利: 与月份无关, 以入库日记录按滚动 7 天窗口汇总
         recent_days = self.get_recent_daily(wallet, days=7)
+        # 今日盈利: 当前 UTC 自然日, 直接复用 recent_days 中的今天记录
+        now = datetime.now(timezone.utc)
+        today_start = int(now.replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp())
+        today_end = today_start + 86399
+        today_pnl = sum(d["realized_profit"] for d in recent_days
+                        if today_start <= d["date"] <= today_end)
         return {
             "wallet": wallet,
             "month": month,
@@ -733,6 +740,7 @@ class Database:
             "loss_sells": loss_sells,
             "win_rate": _win_rate(win_sells, loss_sells),
             "pnl_7d": sum(d["realized_profit"] for d in recent_days),
+            "today_pnl": today_pnl,
         }
 
     @staticmethod

@@ -320,6 +320,13 @@ def _target_months(n_back: int = SYNC_MONTHS_BACK) -> List[str]:
     return out
 
 
+def _today_range_utc() -> tuple[int, int]:
+    now = datetime.now(timezone.utc)
+    start = int(now.replace(hour=0, minute=0, second=0,
+                            microsecond=0).timestamp())
+    return start, start + 86399
+
+
 def _page_param(request: Request, default: int = 1) -> int:
     """Read ?page= safely (non-numeric input falls back to `default`)."""
     try:
@@ -1512,8 +1519,14 @@ def api_profit(address: str, month: Optional[str] = None,
         if month:
             summary = db.get_month_summary(address, month, days=days)
         else:
-            summary = {"wallet": address, "days": len(days),
-                       "realized_profit": sum(d["realized_profit"] for d in days)}
+            today_start, today_end = _today_range_utc()
+            summary = {
+                "wallet": address,
+                "days": len(days),
+                "realized_profit": sum(d["realized_profit"] for d in days),
+                "today_pnl": sum(d["realized_profit"] for d in days
+                                 if today_start <= d["date"] <= today_end),
+            }
 
         # 状态 1: 有数据
         return {"success": True, "status": "ok", "wallet": address,

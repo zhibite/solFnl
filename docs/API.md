@@ -426,7 +426,8 @@ print(r.json())
     "win_sells": 30,
     "loss_sells": 12,
     "win_rate": 0.7142857142857143,
-    "pnl_7d": 320.0
+    "pnl_7d": 320.0,
+    "today_pnl": 45.6
   },
   "meta": { "...": "结构见上方「钱包 meta」；未抓取到时为 null" },
   "score": { "...": "结构见上方「钱包评分 score」；未计算时为 null" },
@@ -502,6 +503,9 @@ print(r.json())
 `wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`。
 `date` 是 UTC 秒级时间戳；GMGN 源没有 `last_trade_time`，该字段固定为 `0`；金额单位为 USD。
 （GMGN 原始字段到这些字段的映射见 `app/gmgn_client.py` 的 `normalize()`。）
+
+`summary.today_pnl` 是当前 UTC 自然日的已实现盈亏，与 `month` 参数无关，取最近一次同步的数据；
+单地址、批量查询和 `/api/track` 的 `summary` 都会带这个字段。
 
 **`GET /api/health`**
 

@@ -179,6 +179,7 @@ curl https://fnl.bquant.com/api/health
   数据直接来自 GMGN 公开接口，未抓取到时 `meta` 为 `null`；完整字段见 [docs/API.md](./docs/API.md)。
   注意：API 行内的 `pnl_7d` 是本地按日汇总；GMGN 的 7D 统计在 `meta.realized_profit_7d`（USD）和 `meta.pnl_7d`（收益率）。
 - 钱包相关的返回同时带 `score`：`value`（0-100）、`grade`、`window_days`、`meta_available`、`components`（五项得分）、`metrics`（原始指标）、`updated_at`。
+- `summary.today_pnl` 是当前 UTC 自然日的已实现盈亏，单地址、批量查询和 `/api/track` 都会返回。
 
 单地址的 `days[]` 每个元素按 GMGN 每日记录存储，字段为：
 `wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`
