@@ -765,7 +765,11 @@ class Database:
                            offset: int,
                            search: Optional[str] = None
                            ) -> List[Dict[str, Any]]:
-        """One SQL: per-wallet month aggregates + label/enabled, paged."""
+        """One SQL: per-wallet month aggregates + label/enabled, paged.
+
+        Ordered by GMGN follow_count (被追踪数) descending, then by newest
+        wallet, so the page leads with the most-watched addresses.
+        """
         start, end = self._month_range(month)
         cutoff_7d = _recent_cutoff(7)
         today_start = int(datetime.now(timezone.utc).replace(
@@ -824,7 +828,10 @@ class Database:
                   ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
                 WHERE w.enabled = 1{search_sql}
                 GROUP BY w.address
-                ORDER BY w.created_at DESC, w.address ASC
+                -- Most-followed wallets first; wallets whose meta has not
+                -- been fetched yet (follow_count NULL) sink to the bottom.
+                ORDER BY COALESCE(m.follow_count, 0) DESC,
+                         w.created_at DESC, w.address ASC
                 LIMIT ? OFFSET ?
             """, (cutoff_7d, today_start, today_end, start, end,
                   *search_params, limit, offset)).fetchall()
