@@ -398,7 +398,7 @@ print(r.json())
 ```
 
 每个钱包行是该地址该月的汇总；`buy_volume` / `sell_volume` / `transfer_*` 都是当月合计。
-`today_pnl` 是当前 UTC 自然日的已实现盈亏（最近一次同步时的值），与 `month` 参数无关。
+`today_pnl` 是当前北京时间自然日（UTC+8）的已实现盈亏（最近一次同步时的值），与 `month` 参数无关。
 `meta` 是 GMGN 公开统计（被追踪/被备注/7D 盈利等），结构见上方「钱包 meta」；未抓取到时为 `null`。
 
 > 行内的 `pnl_7d` 是本服务按日记录计算的近 7 天净盈亏；
@@ -501,10 +501,10 @@ print(r.json())
 
 `days[]` 每个元素按 GMGN 每日记录存储，字段为：
 `wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`。
-`date` 是 UTC 秒级时间戳；GMGN 源没有 `last_trade_time`，该字段固定为 `0`；金额单位为 USD。
+`date` 是日期标签：该天北京时间自然日的日期编码成 UTC 零点时间戳；GMGN 源没有 `last_trade_time`，该字段固定为 `0`；金额单位为 USD。
 （GMGN 原始字段到这些字段的映射见 `app/gmgn_client.py` 的 `normalize()`。）
 
-`summary.today_pnl` 是当前 UTC 自然日的已实现盈亏，与 `month` 参数无关，取最近一次同步的数据；
+`summary.today_pnl` 是当前北京时间自然日（UTC+8）的已实现盈亏，与 `month` 参数无关，取最近一次同步的数据；
 单地址、批量查询和 `/api/track` 的 `summary` 都会带这个字段。
 
 **`GET /api/health`**

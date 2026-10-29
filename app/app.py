@@ -7,10 +7,11 @@ Env:  DATABASE_PATH (default /data/gmgndaily.db)
       SESSION_SECRET (cookie signing key; set for stable sessions)
       SYNC_INTERVAL_MIN (default 60), SYNC_MONTHS_BACK (default 2)
       HISTORY_SYNC_INTERVAL_MIN (default 1440)
-      SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 60)
-      SYNC_MAX_REQUESTS_PER_TICK (default 60)
+      SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 180)
+      SYNC_MAX_REQUESTS_PER_TICK (default 180)
       META_SYNC_INTERVAL_MIN (default 60)
-      META_TICK_SECONDS (default 30), META_BATCH_SIZE (default 20)
+      META_TICK_SECONDS (default 30), META_BATCH_SIZE (default 40)
+      GMGN_TZ_NAME (default Asia/Shanghai), GMGN_TZ_OFFSET (default 28800)
       META_LIVE_CACHE_SECONDS (default 60)
       META_LIVE_TIMEOUT_SECONDS (default 10)
       META_LIVE_MAX_REQUESTS_PER_MINUTE (default 60)
@@ -40,7 +41,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from database import get_db
-from gmgn_client import fetch_wallet_meta
+from gmgn_client import TZ_NAME as GMGN_TZ_NAME, fetch_wallet_meta
 from profit_source import ProfitSourceManager
 from scoring import compute_wallet_score
 from validators import is_valid_month, is_valid_sol_address
@@ -56,14 +57,14 @@ HISTORY_SYNC_INTERVAL_MIN = max(
     int(os.getenv("HISTORY_SYNC_INTERVAL_MIN", "1440")), 1)
 SYNC_MONTHS_BACK = int(os.getenv("SYNC_MONTHS_BACK", "2"))
 SYNC_TICK_SECONDS = max(int(os.getenv("SYNC_TICK_SECONDS", "60")), 5)
-SYNC_BATCH_SIZE = max(int(os.getenv("SYNC_BATCH_SIZE", "60")), 1)
+SYNC_BATCH_SIZE = max(int(os.getenv("SYNC_BATCH_SIZE", "180")), 1)
 SYNC_MAX_REQUESTS_PER_TICK = max(
-    int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "60")), 1)
+    int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "180")), 1)
 SYNC_LOG_RETENTION_DAYS = max(int(os.getenv("SYNC_LOG_RETENTION_DAYS", "7")), 1)
 META_SYNC_INTERVAL_MIN = max(
     int(os.getenv("META_SYNC_INTERVAL_MIN", "60")), 1)
 META_TICK_SECONDS = max(int(os.getenv("META_TICK_SECONDS", "30")), 5)
-META_BATCH_SIZE = max(int(os.getenv("META_BATCH_SIZE", "20")), 1)
+META_BATCH_SIZE = max(int(os.getenv("META_BATCH_SIZE", "40")), 1)
 META_LIVE_CACHE_SECONDS = max(
     int(os.getenv("META_LIVE_CACHE_SECONDS", "60")), 5)
 META_LIVE_TIMEOUT_SECONDS = max(
@@ -308,8 +309,8 @@ def _source_manager() -> ProfitSourceManager:
 
 
 def _target_months(n_back: int = SYNC_MONTHS_BACK) -> List[str]:
-    """Current month + n_back previous months, 'YYYY-MM' format."""
-    now = datetime.now(timezone.utc)
+    """Current Beijing month + n_back previous months, 'YYYY-MM' format."""
+    now = datetime.now(_BEIJING_TZ)
     out = []
     y, m = now.year, now.month
     for _ in range(n_back + 1):
@@ -320,10 +321,11 @@ def _target_months(n_back: int = SYNC_MONTHS_BACK) -> List[str]:
     return out
 
 
-def _today_range_utc() -> tuple[int, int]:
-    now = datetime.now(timezone.utc)
-    start = int(now.replace(hour=0, minute=0, second=0,
-                            microsecond=0).timestamp())
+def _today_range_beijing() -> tuple[int, int]:
+    """Date label (UTC-midnight encoded) of the current Beijing day."""
+    now = datetime.now(_BEIJING_TZ)
+    start = int(datetime(now.year, now.month, now.day,
+                         tzinfo=timezone.utc).timestamp())
     return start, start + 86399
 
 
@@ -1137,7 +1139,7 @@ async def api_sync_wallet(request: Request):
                 "meta_ok": bool(meta_result.get("ok")),
                 "meta_error": meta_result.get("error") or ""}
     latest = db.get_recent_daily(address, days=7)
-    today_start, _ = _today_range_utc()
+    today_start, _ = _today_range_beijing()
     return {"success": True, "wallet": address,
             "total_days": res["total_days"],
             "months": [m["month"] for m in ok_months],
@@ -1530,7 +1532,7 @@ def api_profit(address: str, month: Optional[str] = None,
         if month:
             summary = db.get_month_summary(address, month, days=days)
         else:
-            today_start, today_end = _today_range_utc()
+            today_start, today_end = _today_range_beijing()
             summary = {
                 "wallet": address,
                 "days": len(days),
@@ -1648,7 +1650,8 @@ def api_list_wallets(request: Request):
 
 @app.get("/api/health")
 def api_health():
-    return {"success": True, "service": "gmgndaily"}
+    return {"success": True, "service": "gmgndaily",
+            "daily_tz": GMGN_TZ_NAME}
 
 
 def run_server(host: Optional[str] = None, port: Optional[int] = None):

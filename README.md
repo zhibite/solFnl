@@ -57,13 +57,14 @@ python app/verify_flow.py
      超过 `META_SYNC_INTERVAL_MIN` 的钱包会重新入队，每 `META_TICK_SECONDS`
      秒处理 `META_BATCH_SIZE` 个
 
-> 说明：1.5 万地址、默认 `META_BATCH_SIZE=20` / `META_TICK_SECONDS=30` 时，
-> meta 完整轮询约 6～7 小时；**正在查看的单地址/详情页会实时拉取**（60 秒缓存），
+> 说明：1.5 万地址、默认 `META_BATCH_SIZE=40` / `META_TICK_SECONDS=30` 时，
+> meta 完整轮询约 3～4 小时；**正在查看的单地址/详情页会实时拉取**（60 秒缓存），
 > 列表接口使用后台队列的缓存结果。
 
 > 说明：`SYNC_INTERVAL_MIN` 是当月数据的“最短”间隔，实际刷新速度还受
-> `SYNC_MAX_REQUESTS_PER_TICK` 限制。当前 1.5 万地址规模下，一轮当月同步仍需
-> 数小时；需要更快可调大请求预算，但要注意 GMGN 限流。
+> `SYNC_MAX_REQUESTS_PER_TICK` 限制。1.9 万地址、默认 180 请求/批时，一轮当月
+> 同步约 2 小时（远快于原先 60 请求/批的约 5 小时以上）；需要更快可继续调大
+> 请求预算，但要注意 GMGN 限流。
 
 ## 钱包评分（0-100）
 
@@ -179,12 +180,12 @@ curl https://fnl.bquant.com/api/health
   数据直接来自 GMGN 公开接口，未抓取到时 `meta` 为 `null`；完整字段见 [docs/API.md](./docs/API.md)。
   注意：API 行内的 `pnl_7d` 是本地按日汇总；GMGN 的 7D 统计在 `meta.realized_profit_7d`（USD）和 `meta.pnl_7d`（收益率）。
 - 钱包相关的返回同时带 `score`：`value`（0-100）、`grade`、`window_days`、`meta_available`、`components`（五项得分）、`metrics`（原始指标）、`updated_at`。
-- `summary.today_pnl` 是当前 UTC 自然日的已实现盈亏，单地址、批量查询和 `/api/track` 都会返回。
+- `summary.today_pnl` 是当前北京时间自然日（UTC+8）的已实现盈亏，单地址、批量查询和 `/api/track` 都会返回。
 
 单地址的 `days[]` 每个元素按 GMGN 每日记录存储，字段为：
 `wallet, date, buy_count, sell_count, transfer_in_count, transfer_out_count, buy_volume, sell_volume, transfer_in_amount_usd, transfer_out_amount_usd, realized_profit, gains, losses, win_sells, loss_sells, last_trade_time`
 （字段与 GMGN 原始字段的对应关系见 [gmgn_client.py](app/gmgn_client.py) 的 `normalize()`；
-`date` 为 UTC 秒级时间戳，GMGN 源没有 `last_trade_time`，该字段固定为 0）。
+`date` 为日期标签：该天北京时间自然日的日期编码成 UTC 零点时间戳，GMGN 源没有 `last_trade_time`，该字段固定为 0）。
 
 ### 常见错误（success 为 false，看 message）
 
@@ -227,15 +228,17 @@ docs/debot.md       # Debot 抓包样本（历史参考）
 | `HISTORY_SYNC_INTERVAL_MIN` | `1440` | 历史月份最短同步间隔（分钟，默认 24h） |
 | `META_SYNC_INTERVAL_MIN` | `60` | 钱包公开元数据（被追踪/被备注/7D 统计）最短刷新间隔 |
 | `META_TICK_SECONDS` | `30` | 元数据队列每批之间的间隔 |
-| `META_BATCH_SIZE` | `20` | 每批刷新多少个钱包（每个钱包 2 个 GET） |
+| `META_BATCH_SIZE` | `40` | 每批刷新多少个钱包（每个钱包 2 个 GET） |
 | `META_LIVE_CACHE_SECONDS` | `60` | 单地址/详情页实时刷新 meta 的缓存时间 |
 | `META_LIVE_TIMEOUT_SECONDS` | `10` | 单地址实时刷新的上游超时 |
 | `META_LIVE_MAX_REQUESTS_PER_MINUTE` | `60` | 实时刷新全局每分钟最多请求数 |
 | `SCORE_WINDOW_DAYS` | `90` | 钱包评分使用的日历回看天数 |
 | `SYNC_MONTHS_BACK` | `2` | 除当月外再往前同步几个月 |
 | `SYNC_TICK_SECONDS` | `60` | 调度队列每批之间休眠的秒数 |
-| `SYNC_BATCH_SIZE` | `60` | 每批最多处理多少个钱包（还受请求预算限制） |
-| `SYNC_MAX_REQUESTS_PER_TICK` | `60` | 每批最多发起多少个 GMGN 请求 |
+| `SYNC_BATCH_SIZE` | `180` | 每批最多处理多少个钱包（还受请求预算限制） |
+| `SYNC_MAX_REQUESTS_PER_TICK` | `180` | 每批最多发起多少个 GMGN 请求 |
+| `GMGN_TZ_NAME` | `Asia/Shanghai` | GMGN 日线按此时区的自然日分桶（今日盈利同口径） |
+| `GMGN_TZ_OFFSET` | `28800` | 上述时区的 UTC 偏移秒数（北京 +8h） |
 | `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
 | `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
 | `MAX_BATCH_WALLETS` | `500` | `/api/wallets/batch` 单次最大地址数 |
