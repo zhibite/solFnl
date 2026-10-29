@@ -43,10 +43,25 @@ DAILY_PROFITS_PATH = "/pf/api/v1/wallets/{chain}/daily_profits"
 COMMON_STAT_PATH = "/api/v1/wallet_common_stat/{chain}/{wallet}"
 SMARTMONEY_PATH = "/defi/quotation/v1/smartmoney/{chain}/wallet/{wallet}"
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 #: Daily rows are bucketed by the calendar day of this timezone (the GMGN web
 #: UI sends the same pair). Beijing by default so "today" matches the console.
 TZ_NAME = os.getenv("GMGN_TZ_NAME", "Asia/Shanghai")
-TZ_OFFSET = os.getenv("GMGN_TZ_OFFSET", "28800")  # seconds east of UTC
+TZ_OFFSET = _env_int("GMGN_TZ_OFFSET", 28800)  # seconds east of UTC
+
+#: Diagnostics for /api/health: whether the tz query/body was accepted
+#: ("ok") or the request had to be retried without it ("fallback").
+_TZ_STATS = {"ok": 0, "fallback": 0}
+
+
+def tz_stats() -> Dict[str, int]:
+    return dict(_TZ_STATS)
 
 #: 一年秒数 — 接口硬限制: time range must be less than 1 year
 MAX_RANGE_SECONDS = 365 * 24 * 3600
@@ -210,12 +225,15 @@ class GMGNDailyClient:
             body["end_at"] = int(end_at)
         path = DAILY_PROFITS_PATH.format(chain=self.chain)
         tz_query = (f"?tz_name={quote(TZ_NAME)}"
-                    f"&tz_offset={quote(TZ_OFFSET)}")
+                    f"&tz_offset={quote(str(TZ_OFFSET))}")
+        body_tz = dict(body, tz_name=TZ_NAME, tz_offset=TZ_OFFSET)
         try:
-            data = self._post(path + tz_query, body)
+            data = self._post(path + tz_query, body_tz)
+            _TZ_STATS["ok"] += 1
         except GMGNError as e:
-            # Never take the whole sync down if upstream rejects the query
-            # params: retry without them and fall back to UTC day buckets.
+            # Never take the whole sync down if upstream rejects the params:
+            # retry without them and fall back to UTC day buckets.
+            _TZ_STATS["fallback"] += 1
             log.warning("daily_profits tz params rejected (%s); "
                         "retrying without them", e)
             data = self._post(path, body)

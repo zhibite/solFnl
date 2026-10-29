@@ -41,7 +41,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from database import get_db
-from gmgn_client import TZ_NAME as GMGN_TZ_NAME, fetch_wallet_meta
+from gmgn_client import (TZ_NAME as GMGN_TZ_NAME, fetch_wallet_meta,
+                         tz_stats)
 from profit_source import ProfitSourceManager
 from scoring import compute_wallet_score
 from validators import is_valid_month, is_valid_sol_address
@@ -1651,7 +1652,7 @@ def api_list_wallets(request: Request):
 @app.get("/api/health")
 def api_health():
     return {"success": True, "service": "gmgndaily",
-            "daily_tz": GMGN_TZ_NAME}
+            "daily_tz": GMGN_TZ_NAME, "daily_tz_stats": tz_stats()}
 
 
 def run_server(host: Optional[str] = None, port: Optional[int] = None):
