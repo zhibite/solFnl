@@ -26,18 +26,7 @@
 </div>
 
 <!-- 统计卡片 -->
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-    <div class="stat-card rounded-xl p-6 card-hover">
-        <div class="flex items-center justify-between">
-            <div>
-                <div class="text-sm text-gray-400 mb-2">{{ month }} 总盈利</div>
-                <div class="text-4xl font-bold {% if total >= 0 %}text-success{% else %}text-danger{% endif %}">
-                    {{ "%.2f"|format(total) }}
-                </div>
-            </div>
-            <div class="text-3xl">📈</div>
-        </div>
-    </div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
     <div class="stat-card rounded-xl p-6 card-hover">
         <div class="flex items-center justify-between">
             <div>
@@ -72,7 +61,7 @@
         </div>
         <p class="text-xs text-gray-400 mt-2">
             下表为 <span class="text-gray-200 font-medium">{{ month }}</span> 月度汇总（不是单日数据）：
-            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；7D盈利、被追踪/被备注直接来自 GMGN 公开接口；
+            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；7D盈利、被追踪/被备注直接来自 GMGN 公开接口（缺失的会在后台自动补齐）；
             本月净盈利 = 盈利合计 + 亏损合计。评分按最近 {{ score_window }} 天综合计算，不随月份选择变化。
         </p>
     </div>
@@ -151,9 +140,13 @@
                         <div>出 {{ r.transfer_out_amount_usd|money }} <span class="text-gray-500">({{ r.transfer_out_count }})</span></div>
                     </td>
                     <td class="px-6 py-4 text-right text-gray-300 text-xs">
-                        {% if r.meta_fetched_at %}
+                        {% if r.meta_has_data %}
                         <div>追踪 {{ r.meta_follow_count or 0 }} / 备注 {{ r.meta_remark_count or 0 }}</div>
-                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                        {% elif r.meta_fetched_at %}
+                        <span class="text-warning" title="上次抓取失败：{{ r.meta_last_error }}">失败</span>
+                        {% else %}
+                        <span class="text-gray-500" title="尚未抓取，后台会自动补齐，稍后刷新即可">-</span>
+                        {% endif %}
                     </td>
                     <td class="px-6 py-4 text-right text-gray-400 text-xs">{{ r.updated_at|beijing_time if r.updated_at else '-' }}</td>
                     <td class="px-6 py-4">

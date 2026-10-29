@@ -54,12 +54,14 @@ python app/verify_flow.py
    - 每 `SYNC_TICK_SECONDS` 秒处理一批，最多 `SYNC_BATCH_SIZE` 个钱包、
      `SYNC_MAX_REQUESTS_PER_TICK` 个 GMGN 请求；只拉真正到期的月份
    - 公开元数据（被追踪/被备注/7D 统计）由独立队列刷新，不占盈利同步批次；
-     超过 `META_SYNC_INTERVAL_MIN` 的钱包会重新入队，每 `META_TICK_SECONDS`
-     秒处理 `META_BATCH_SIZE` 个
+     超过 `META_SYNC_INTERVAL_MIN` 的钱包会重新入队，每批 `META_BATCH_SIZE`
+     个、`META_CONCURRENCY` 个并发拉取，批次满了就立刻开始下一批
 
-> 说明：1.5 万地址、默认 `META_BATCH_SIZE=40` / `META_TICK_SECONDS=30` 时，
-> meta 完整轮询约 3～4 小时；**正在查看的单地址/详情页会实时拉取**（60 秒缓存），
-> 列表接口使用后台队列的缓存结果。
+> 说明：1.9 万地址、默认 `META_BATCH_SIZE=40` / `META_CONCURRENCY=6` 时，meta 一轮
+> 约 1～2 小时，`META_SYNC_INTERVAL_MIN` 默认 6 小时（间隔太短会让队列永远追不上，
+> 排在后面的地址一直拿不到数据）；**正在查看的单地址/详情页、以及总览页当前页里
+> 还没抓到元数据的地址会在后台实时补抓**（每页最多 `META_PAGE_REFRESH_LIMIT` 个，
+> 60 秒缓存），列表接口使用后台队列的缓存结果。
 
 > 说明：`SYNC_INTERVAL_MIN` 是当月数据的“最短”间隔，实际刷新速度还受
 > `SYNC_MAX_REQUESTS_PER_TICK` 限制。1.9 万地址、默认 180 请求/批时，一轮当月
@@ -84,7 +86,7 @@ python app/verify_flow.py
 - meta 未抓取时，社交/风险/收益率部分为 0，API 的 `score.meta_available`（`metrics.meta_available` 同值）会是 `false`，列表里分数旁会显示 `*`，同步后自动更新
 - 历史钱包在服务启动后由后台任务补算；新钱包在同步时计算
 - 单地址查询（`/api/profit/<address>`、详情页、盈利页）会按 `META_LIVE_CACHE_SECONDS` 缓存实时刷新 meta，并立即重算评分
-- 列表接口使用后台元数据队列的缓存结果；队列独立于盈利同步，按 `META_TICK_SECONDS` / `META_BATCH_SIZE` 持续刷新
+- 列表接口使用后台元数据队列的缓存结果；队列独立于盈利同步，按 `META_BATCH_SIZE` / `META_CONCURRENCY` 持续刷新，总览页当前页缺元数据的地址会额外补抓
 
 ## 对外 API（无需登录，直接调）
 
@@ -226,9 +228,11 @@ docs/debot.md       # Debot 抓包样本（历史参考）
 | `SESSION_SECRET` | 空 → 每次启动随机 | 会话签名密钥；不设则重启后登录态失效、多 worker 互不认 |
 | `SYNC_INTERVAL_MIN` | `60` | 当月数据最短同步间隔（分钟） |
 | `HISTORY_SYNC_INTERVAL_MIN` | `1440` | 历史月份最短同步间隔（分钟，默认 24h） |
-| `META_SYNC_INTERVAL_MIN` | `60` | 钱包公开元数据（被追踪/被备注/7D 统计）最短刷新间隔 |
-| `META_TICK_SECONDS` | `30` | 元数据队列每批之间的间隔 |
+| `META_SYNC_INTERVAL_MIN` | `360` | 钱包公开元数据（被追踪/被备注/7D 统计）最短刷新间隔 |
+| `META_TICK_SECONDS` | `30` | 元数据队列空闲时的休眠秒数（批次满了会立刻继续） |
 | `META_BATCH_SIZE` | `40` | 每批刷新多少个钱包（每个钱包 2 个 GET） |
+| `META_CONCURRENCY` | `6` | 每批同时拉取多少个钱包 |
+| `META_PAGE_REFRESH_LIMIT` | `15` | 总览页每次加载最多补抓多少个缺元数据的地址 |
 | `META_LIVE_CACHE_SECONDS` | `60` | 单地址/详情页实时刷新 meta 的缓存时间 |
 | `META_LIVE_TIMEOUT_SECONDS` | `10` | 单地址实时刷新的上游超时 |
 | `META_LIVE_MAX_REQUESTS_PER_MINUTE` | `60` | 实时刷新全局每分钟最多请求数 |

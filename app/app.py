@@ -9,8 +9,9 @@ Env:  DATABASE_PATH (default /data/gmgndaily.db)
       HISTORY_SYNC_INTERVAL_MIN (default 1440)
       SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 180)
       SYNC_MAX_REQUESTS_PER_TICK (default 180)
-      META_SYNC_INTERVAL_MIN (default 60)
+      META_SYNC_INTERVAL_MIN (default 360)
       META_TICK_SECONDS (default 30), META_BATCH_SIZE (default 40)
+      META_CONCURRENCY (default 6), META_PAGE_REFRESH_LIMIT (default 15)
       META_LIVE_CACHE_SECONDS (default 60)
       META_LIVE_TIMEOUT_SECONDS (default 10)
       META_LIVE_MAX_REQUESTS_PER_MINUTE (default 60)
@@ -26,6 +27,7 @@ import secrets
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,9 +63,15 @@ SYNC_MAX_REQUESTS_PER_TICK = max(
     int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "180")), 1)
 SYNC_LOG_RETENTION_DAYS = max(int(os.getenv("SYNC_LOG_RETENTION_DAYS", "7")), 1)
 META_SYNC_INTERVAL_MIN = max(
-    int(os.getenv("META_SYNC_INTERVAL_MIN", "60")), 1)
+    int(os.getenv("META_SYNC_INTERVAL_MIN", "360")), 1)
 META_TICK_SECONDS = max(int(os.getenv("META_TICK_SECONDS", "30")), 5)
 META_BATCH_SIZE = max(int(os.getenv("META_BATCH_SIZE", "40")), 1)
+# Wallets fetched in parallel by the meta queue. Each wallet costs two GMGN
+# GETs, so keep this modest to stay friendly to the upstream.
+META_CONCURRENCY = max(int(os.getenv("META_CONCURRENCY", "6")), 1)
+# Page views refresh up to this many visible wallets that still lack metadata.
+META_PAGE_REFRESH_LIMIT = max(
+    int(os.getenv("META_PAGE_REFRESH_LIMIT", "15")), 0)
 META_LIVE_CACHE_SECONDS = max(
     int(os.getenv("META_LIVE_CACHE_SECONDS", "60")), 5)
 META_LIVE_TIMEOUT_SECONDS = max(
@@ -481,6 +489,52 @@ def ensure_wallet_meta(wallet: str,
     return meta
 
 
+# Page views ask for a background refresh of the wallets they show, so a
+# freshly imported address gets its follow/remark numbers without waiting for
+# the whole meta queue to cycle through every tracked wallet.
+_live_meta_executor = ThreadPoolExecutor(max_workers=4,
+                                         thread_name_prefix="meta-live")
+_live_meta_pending: Dict[str, float] = {}
+_live_meta_pending_lock = threading.Lock()
+
+
+def _refresh_meta_now(address: str) -> None:
+    try:
+        if _live_meta_allowed():
+            sync_wallet_meta_and_score(
+                address, timeout=META_LIVE_TIMEOUT_SECONDS)
+    except Exception as e:
+        log.warning("[META] page refresh %s failed: %s", address[:8], e)
+    finally:
+        with _live_meta_pending_lock:
+            _live_meta_pending.pop(address, None)
+
+
+def queue_page_meta_refresh(addresses: List[str]) -> None:
+    """Background refresh for page rows that have no usable meta yet."""
+    if META_PAGE_REFRESH_LIMIT <= 0:
+        return
+    picked: List[str] = []
+    cutoff = time.monotonic() - 300
+    with _live_meta_pending_lock:
+        stuck = [a for a, ts in _live_meta_pending.items() if ts < cutoff]
+        for address in stuck:
+            _live_meta_pending.pop(address, None)
+        for address in addresses:
+            if len(picked) >= META_PAGE_REFRESH_LIMIT:
+                break
+            if not address or address in _live_meta_pending:
+                continue
+            _live_meta_pending[address] = time.monotonic()
+            picked.append(address)
+    for address in picked:
+        try:
+            _live_meta_executor.submit(_refresh_meta_now, address)
+        except Exception:
+            with _live_meta_pending_lock:
+                _live_meta_pending.pop(address, None)
+
+
 def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
     """Blocking sync of one wallet over given months. Returns per-month result."""
     db = get_db()
@@ -696,27 +750,44 @@ async def _score_backfill_loop():
 
 
 async def _meta_loop():
-    """Refresh follow/remark + 7d metadata independently of profit sync."""
-    log.info("[META] queue start tick=%ss batch=%d stale=%dmin",
-             META_TICK_SECONDS, META_BATCH_SIZE, META_SYNC_INTERVAL_MIN)
+    """Refresh follow/remark + 7d metadata independently of profit sync.
+
+    Wallets are fetched META_CONCURRENCY at a time. A full batch means there
+    is still a backlog, so the loop starts the next batch right away instead
+    of idling for META_TICK_SECONDS; with tens of thousands of wallets the
+    old "40 wallets every 30s" pace never caught up.
+    """
+    log.info("[META] queue start tick=%ss batch=%d conc=%d stale=%dmin",
+             META_TICK_SECONDS, META_BATCH_SIZE, META_CONCURRENCY,
+             META_SYNC_INTERVAL_MIN)
+    sem = asyncio.Semaphore(META_CONCURRENCY)
+
+    async def refresh(address: str) -> None:
+        async with sem:
+            try:
+                await asyncio.to_thread(
+                    sync_wallet_meta_and_score, address, 25)
+            except Exception as e:
+                log.warning("[META] %s failed: %s", address[:8], e)
+
     while True:
         try:
             addresses = await asyncio.to_thread(
                 get_db().list_wallets_meta_due,
                 META_SYNC_INTERVAL_MIN, META_BATCH_SIZE)
             if addresses:
-                for address in addresses:
-                    try:
-                        await asyncio.to_thread(
-                            sync_wallet_meta_and_score, address, 25)
-                    except Exception as e:
-                        log.warning("[META] %s failed: %s", address[:8], e)
+                await asyncio.gather(*(refresh(a) for a in addresses))
                 log.info("[META] batch done: %d", len(addresses))
         except asyncio.CancelledError:
             raise
         except Exception as e:
             log.exception("[META] queue error: %s", e)
-        await asyncio.sleep(META_TICK_SECONDS)
+            await asyncio.sleep(META_TICK_SECONDS)
+            continue
+        if len(addresses) < META_BATCH_SIZE:
+            await asyncio.sleep(META_TICK_SECONDS)
+        else:
+            await asyncio.sleep(1)
 
 
 def _safe_next(next_url: str) -> str:
@@ -744,7 +815,18 @@ def home(request: Request):
     rows = [dict(s) for s in db.get_summaries_page(
         month, per_page, (page - 1) * per_page, search=q)]
 
-    total = db.get_month_total(month, search=q)
+    # Follow/remark counts come from GMGN and are filled in by the background
+    # meta queue; ask for the visible ones now so this page is not stuck on "-".
+    # Wallets that failed recently are left alone for a while so one dead page
+    # cannot eat the whole live-refresh budget.
+    retry_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    queue_page_meta_refresh([
+        r["wallet"] for r in rows
+        if not r.get("meta_has_data")
+        and (not r.get("meta_fetched_at")
+             or r["meta_fetched_at"] < retry_cutoff)
+    ])
+
     sync_stats = db.get_sync_stats()
     months = _target_months(6)
     context = _make_json_safe({
@@ -753,7 +835,6 @@ def home(request: Request):
         "rows": rows,
         "month": str(month),
         "q": q,
-        "total": float(total),
         "sync_stats": sync_stats,
         "months": months,
         "score_window": SCORE_WINDOW_DAYS,
