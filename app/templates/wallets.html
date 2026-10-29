@@ -63,7 +63,7 @@
                     <th class="px-6 py-3">地址</th>
                     <th class="px-6 py-3 text-right" title="综合评分 0-100：盈利30 + 胜率20 + 稳定20 + 社交15 + 风险15">评分</th>
                     <th class="px-6 py-3 text-right">累计盈利</th>
-                    <th class="px-6 py-3 text-right" title="来自 GMGN smartmoney 公开接口的 realized_profit_7d（USD）">7D盈利(GMGN)</th>
+                    <th class="px-6 py-3 text-right" title="优先显示 GMGN smartmoney 公开接口的 realized_profit_7d（USD）；未抓取到时回退为本地日汇总的近 7 天盈利">7D盈利(GMGN)</th>
                     <th class="px-6 py-3 text-right" title="来自 GMGN wallet_common_stat 的 follow_count / remark_count">被追踪/被备注</th>
                     <th class="px-6 py-3 text-right">胜率</th>
                     <th class="px-6 py-3 text-right">最近同步（北京）</th>
@@ -89,11 +89,16 @@
                         <div class="text-xs font-normal text-gray-500">{{ w.active_days }} 个交易日</div>
                     </td>
                     <td class="px-6 py-3 text-right text-xs">
-                        {% if w.meta_fetched_at %}
+                        {% if w.meta_fetched_at and w.meta_has_data %}
                         <div class="font-bold {% if (w.meta_realized_profit_7d or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
                             {{ (w.meta_realized_profit_7d or 0)|money }}
                         </div>
                         <div class="text-gray-500">{{ "%.2f"|format((w.meta_pnl_7d or 0) * 100) }}% · 买 {{ w.meta_buy_7d or 0 }} / 卖 {{ w.meta_sell_7d or 0 }}</div>
+                        {% elif w.pnl_7d is not none %}
+                        <div class="font-bold {% if (w.pnl_7d or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
+                            {{ (w.pnl_7d or 0)|money }}
+                        </div>
+                        <div class="text-gray-500">本地近7天</div>
                         {% else %}<span class="text-gray-500">-</span>{% endif %}
                     </td>
                     <td class="px-6 py-3 text-right text-gray-300 text-xs">
