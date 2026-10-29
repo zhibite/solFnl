@@ -15,6 +15,10 @@
                 <code id="addrText" class="font-mono text-xs bg-gray-900/30 px-3 py-1 rounded border border-gray-700/50 break-all">{{ address }}</code>
                 <button onclick="copyAddr()" class="text-xs px-3 py-1 rounded-lg border border-gray-700/50 hover:bg-gray-800/30 transition">📋 复制</button>
                 <a href="/api/profit/{{ address }}?month={{ month }}" target="_blank" class="text-xs text-primary hover:text-blue-400 font-medium transition">🔗 JSON API</a>
+                {% if gmgn_url %}
+                <a href="{{ gmgn_url }}" target="_blank" rel="noopener noreferrer"
+                   class="text-xs px-3 py-1 rounded-lg border border-gray-700/50 hover:bg-gray-800/30 transition">🌐 GMGN</a>
+                {% endif %}
             </div>
         </div>
         <form method="get" class="flex items-center gap-2">

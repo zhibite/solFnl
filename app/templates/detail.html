@@ -11,6 +11,10 @@
             <div class="mt-3 flex items-center gap-3 text-sm text-gray-400">
                 <code class="font-mono text-xs bg-gray-900/30 px-3 py-1 rounded border border-gray-700/50">{{ address[:8] }}…{{ address[-6:] }}</code>
                 <a href="/profit/{{ address }}?month={{ month }}" class="text-xs text-primary hover:text-blue-400 font-medium transition">📊 盈利页</a>
+                {% if gmgn_url %}
+                <a href="{{ gmgn_url }}" target="_blank" rel="noopener noreferrer"
+                   class="text-xs px-3 py-1 rounded-lg border border-gray-700/50 hover:bg-gray-800/30 transition">🌐 GMGN</a>
+                {% endif %}
             </div>
         </div>
         <form method="get" class="flex items-center gap-2">

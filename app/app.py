@@ -210,6 +210,15 @@ def _fmt_money(value: Any, digits: int = 2) -> str:
         return str(value)
 
 
+#: GMGN's web UI uses "sol" for Solana even when CHAIN=solana.
+CHAIN_SLUG = "sol" if CHAIN.lower() == "solana" else CHAIN.lower()
+
+
+def _gmgn_wallet_url(address: str) -> str:
+    """Public GMGN profile page of one wallet (for the console links)."""
+    return f"https://gmgn.ai/{CHAIN_SLUG}/address/{address}"
+
+
 def _json_load(value: Any, default: Any) -> Any:
     if not value:
         return default
@@ -899,6 +908,7 @@ def wallet_detail(request: Request, address: str):
         "month": month,
         "months": _target_months(6),
         "score": db.get_wallet_score(address),
+        "gmgn_url": _gmgn_wallet_url(address),
     })
     context["request"] = request
     return templates.TemplateResponse(request, "detail.html", context)
@@ -941,6 +951,7 @@ def profit_page(request: Request, address: str):
         "score": db.get_wallet_score(address),
         "chart_dates": [_ts_to_date(d["date"]) for d in days],
         "chart_pnls": [d["realized_profit"] for d in days],
+        "gmgn_url": _gmgn_wallet_url(address),
     })
     context["request"] = request
     return templates.TemplateResponse(request, "profit.html", context)
