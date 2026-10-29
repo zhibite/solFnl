@@ -28,6 +28,14 @@
             <span class="font-mono font-medium text-primary">{{ history_interval }} 分钟</span>
         </div>
         <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
+            <span>钱包元数据（被追踪/7D）同步间隔</span>
+            <span class="font-mono font-medium text-primary">{{ meta_interval }} 分钟</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
+            <span>钱包评分窗口</span>
+            <span class="font-mono font-medium text-primary">{{ score_window }} 天</span>
+        </div>
+        <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900/30 border border-gray-700/30">
             <span>同步月份</span>
             <span class="font-mono font-medium text-primary">当月 + 往前 {{ months_back }} 个月</span>
         </div>
@@ -40,7 +48,7 @@
             <span class="font-mono font-medium text-primary">{{ max_requests }} 次</span>
         </div>
     </div>
-    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、HISTORY_SYNC_INTERVAL_MIN、SYNC_MONTHS_BACK、SYNC_BATCH_SIZE、SYNC_TICK_SECONDS、SYNC_MAX_REQUESTS_PER_TICK</p>
+    <p class="text-xs text-gray-400 mt-4">这些参数由环境变量控制：SYNC_INTERVAL_MIN、HISTORY_SYNC_INTERVAL_MIN、META_SYNC_INTERVAL_MIN、SCORE_WINDOW_DAYS、SYNC_MONTHS_BACK、SYNC_BATCH_SIZE、SYNC_TICK_SECONDS、SYNC_MAX_REQUESTS_PER_TICK</p>
 </div>
 
 <!-- 对外 API 文档 -->
@@ -56,6 +64,7 @@
         <p><strong class="text-gray-300">② 鉴权：</strong>这一组接口全部开放，<span class="text-primary">不需要登录、不要带 Cookie 或 token</span>，直接请求即可。</p>
         <p><strong class="text-gray-300">③ 请求格式：</strong>POST 接口必须带请求头 <code class="font-mono text-primary">Content-Type: application/json</code>，请求体是一个 JSON 对象；GET 接口用 query 参数传月份。</p>
         <p><strong class="text-gray-300">④ 返回格式：</strong>统一返回 JSON，其中 <code class="font-mono text-primary">success</code> 是布尔值表示成败。失败时 HTTP 状态码仍是 200，请在 <code class="font-mono text-primary">message</code> 字段里读具体原因，不要只看状态码。</p>
+        <p><strong class="text-gray-300">⑤ 分页：</strong><code class="font-mono">GET /api/wallets</code> 和 <code class="font-mono">GET /api/profit</code> 默认/最多返回 100 个钱包/页，用 <code class="font-mono text-primary">limit</code> + <code class="font-mono text-primary">offset</code> 翻页，响应带 <code class="font-mono text-primary">pagination</code>。</p>
     </div>
 
     <div class="overflow-x-auto">
@@ -84,14 +93,14 @@
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/wallets</td>
-                    <td class="py-3 px-6 text-gray-300">列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功</td>
-                    <td class="py-3 px-6 font-mono text-xs text-gray-400">无</td>
+                    <td class="py-3 px-6 text-gray-300">分页列出跟踪地址及 label、meta、score；默认/最多 100 个/页</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">query: <span class="text-primary">limit</span> (可选, 默认/最大 100) · <span class="text-primary">offset</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/profit?month=2026-10</td>
-                    <td class="py-3 px-6 text-gray-300">所有<span class="text-primary">已启用</span>地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 <code class="font-mono text-xs">total_pnl</code>。不传 month 则取当月</td>
-                    <td class="py-3 px-6 font-mono text-xs text-gray-400">query: <span class="text-primary">month</span> (可选, YYYY-MM)</td>
+                    <td class="py-3 px-6 text-gray-300">分页列出<span class="text-primary">已启用</span>地址该月汇总（含 meta/score），<code class="font-mono text-xs">total_pnl</code> 是所有启用地址的合计；默认/最多 100 个/页</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">query: <span class="text-primary">month</span> · <span class="text-primary">limit</span> (默认/最大 100) · <span class="text-primary">offset</span></td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
@@ -142,10 +151,10 @@ curl -X POST http://127.0.0.1:8038/api/track \
   -d <span class="text-primary">'{&#34;address&#34;:&#34;Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN&#34;,&#34;label&#34;:&#34;聪明钱01&#34;,&#34;months&#34;:[&#34;2026-10&#34;]}'</span>
 
 <span class="text-gray-500"># 3) 查看地址列表</span>
-curl http://127.0.0.1:8038/api/wallets
+curl <span class="text-primary">"http://127.0.0.1:8038/api/wallets?limit=100&offset=0"</span>
 
-<span class="text-gray-500"># 4) 全部地址当月汇总 / 单地址每日明细</span>
-curl <span class="text-primary">"http://127.0.0.1:8038/api/profit?month=2026-10"</span>
+<span class="text-gray-500"># 4) 地址当月汇总（分页） / 单地址每日明细</span>
+curl <span class="text-primary">"http://127.0.0.1:8038/api/profit?month=2026-10&limit=100&offset=0"</span>
 curl <span class="text-primary">"http://127.0.0.1:8038/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"</span>
 
 <span class="text-gray-500"># 5) 健康检查</span>

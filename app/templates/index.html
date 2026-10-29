@@ -64,8 +64,8 @@
         </div>
         <p class="text-xs text-gray-400 mt-2">
             下表为 <span class="text-gray-200 font-medium">{{ month }}</span> 月度汇总（不是单日数据）：
-            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；近7天净盈利为按当前时间滚动的 7 天窗口；
-            本月净盈利 = 盈利合计 + 亏损合计。
+            今日盈利(UTC) 为当前 UTC 自然日的已实现盈亏，随同步更新；7D盈利、被追踪/被备注直接来自 GMGN 公开接口；
+            本月净盈利 = 盈利合计 + 亏损合计。评分按最近 {{ score_window }} 天综合计算，不随月份选择变化。
         </p>
     </div>
     <div class="overflow-x-auto">
@@ -73,14 +73,16 @@
             <thead>
                 <tr class="text-left text-gray-400 border-b border-gray-700/30 bg-gray-900/30">
                     <th class="px-6 py-3">地址</th>
+                    <th class="px-6 py-3 text-right" title="综合评分 0-100：盈利30 + 胜率20 + 稳定20 + 社交15 + 风险15">评分</th>
                     <th class="px-6 py-3 text-right" title="当月有数据的天数">交易天数</th>
                     <th class="px-6 py-3 text-right" title="当前 UTC 自然日（00:00–23:59 UTC）的已实现盈亏，最近一次同步时的值">今日盈利(UTC)</th>
-                    <th class="px-6 py-3 text-right" title="按当前时间往前滚动 7 天的净盈亏，与所选月份无关">近7天净盈利</th>
+                    <th class="px-6 py-3 text-right" title="来自 GMGN smartmoney 公开接口的 realized_profit_7d（USD），不是本地日汇总">7D盈利(GMGN)</th>
                     <th class="px-6 py-3 text-right" title="所选月份的净盈亏 = 盈利合计 + 亏损合计">本月净盈利</th>
                     <th class="px-6 py-3 text-right" title="当月盈利单数 / (盈利单数 + 亏损单数)">月度胜率</th>
                     <th class="px-6 py-3 text-right" title="当月买入 / 卖出笔数">当月买/卖笔数</th>
                     <th class="px-6 py-3 text-right" title="当月买入 / 卖出金额合计（USD）">买入/卖出额(USD)</th>
                     <th class="px-6 py-3 text-right" title="当月转入 / 转出金额合计（USD），括号内为笔数">转入/转出(USD)</th>
+                    <th class="px-6 py-3 text-right" title="来自 GMGN wallet_common_stat 的 follow_count / remark_count">被追踪/被备注</th>
                     <th class="px-6 py-3 text-right" title="最近一次同步尝试时间（北京时间）">最近同步（北京）</th>
                     <th class="px-6 py-3">状态</th>
                     <th class="px-6 py-3">更新</th>
@@ -94,11 +96,28 @@
                             {{ r.wallet[:6] }}…{{ r.wallet[-4:] }}
                         </a>
                     </td>
+                    <td class="px-6 py-4 text-right">
+                        {% if r.score_value is not none %}
+                        <div class="text-lg font-bold {% if r.score_value >= 80 %}text-success{% elif r.score_value >= 60 %}text-primary{% elif r.score_value >= 40 %}text-warning{% else %}text-danger{% endif %}">
+                            {{ "%.1f"|format(r.score_value) }}
+                        </div>
+                        <div class="text-xs text-gray-500">{{ r.score_grade }} · 100分制</div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                    </td>
                     <td class="px-6 py-4 text-right">{{ r.days }}</td>
                     <td class="px-6 py-4 text-right font-bold {% if (r.today_pnl or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ (r.today_pnl or 0)|money }}
                     </td>
-                    <td class="px-6 py-4 text-right font-bold">{{ (r.pnl_7d or 0)|money }}</td>
+                    <td class="px-6 py-4 text-right text-xs">
+                        {% if r.meta_fetched_at %}
+                        <div class="font-bold {% if (r.meta_realized_profit_7d or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
+                            {{ (r.meta_realized_profit_7d or 0)|money }}
+                        </div>
+                        <div class="text-gray-500">
+                            {{ "%.2f"|format((r.meta_pnl_7d or 0) * 100) }}% · 买 {{ r.meta_buy_7d or 0 }} / 卖 {{ r.meta_sell_7d or 0 }}
+                        </div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                    </td>
                     <td class="px-6 py-4 text-right font-bold {% if r.realized_profit >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ r.realized_profit|money }}
                     </td>
@@ -115,6 +134,11 @@
                         <div>入 {{ r.transfer_in_amount_usd|money }} <span class="text-gray-500">({{ r.transfer_in_count }})</span></div>
                         <div>出 {{ r.transfer_out_amount_usd|money }} <span class="text-gray-500">({{ r.transfer_out_count }})</span></div>
                     </td>
+                    <td class="px-6 py-4 text-right text-gray-300 text-xs">
+                        {% if r.meta_fetched_at %}
+                        <div>追踪 {{ r.meta_follow_count or 0 }} / 备注 {{ r.meta_remark_count or 0 }}</div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                    </td>
                     <td class="px-6 py-4 text-right text-gray-400 text-xs">{{ r.updated_at|beijing_time if r.updated_at else '-' }}</td>
                     <td class="px-6 py-4">
                         {% if r.enabled %}<span class="inline-block px-2 py-1 rounded-full bg-success/20 text-success text-xs">✓ 同步中</span>
@@ -125,7 +149,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="12" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="14" class="px-6 py-12 text-center text-gray-500">
                     还没有地址，去 <a href="/wallets" class="text-primary hover:underline font-medium">地址管理</a> 导入吧 →
                 </td></tr>
                 {% endfor %}

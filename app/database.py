@@ -32,6 +32,47 @@ _UPSERT_WALLET_SQL = """
         updated_at = excluded.updated_at
 """
 
+# Selected as a 1:1 LEFT JOIN with alias `m` and prefixed `meta_*` so both
+# list pages and API responses can expose the same wallet metadata.
+_META_SELECT = """
+    m.follow_count AS meta_follow_count,
+    m.remark_count AS meta_remark_count,
+    m.tags_json AS meta_tags_json,
+    m.tag_rank_json AS meta_tag_rank_json,
+    m.gmgn_created_at AS meta_gmgn_created_at,
+    m.fund_from_address AS meta_fund_from_address,
+    m.realized_profit_7d AS meta_realized_profit_7d,
+    m.pnl_7d AS meta_pnl_7d,
+    m.buy_7d AS meta_buy_7d,
+    m.sell_7d AS meta_sell_7d,
+    m.balance AS meta_balance,
+    m.total_profit AS meta_total_profit,
+    m.total_profit_pnl AS meta_total_profit_pnl,
+    m.all_pnl AS meta_all_pnl,
+    m.last_active_timestamp AS meta_last_active_timestamp,
+    m.risk_json AS meta_risk_json,
+    m.fetched_at AS meta_fetched_at,
+    m.last_error AS meta_last_error,
+    m.has_data AS meta_has_data
+"""
+
+_SCORE_SELECT = """
+    sc.score AS score_value,
+    sc.grade AS score_grade,
+    sc.detail_json AS score_detail_json,
+    sc.window_days AS score_window_days,
+    sc.updated_at AS score_updated_at
+"""
+
+
+def _json_load(value: Any, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -140,6 +181,48 @@ class Database:
                     PRIMARY KEY (wallet, date)
                 )
             """)
+            # Public wallet-level stats fetched from GMGN
+            # (wallet_common_stat + smartmoney). Refreshed on a slower cadence
+            # than daily_profit; see META_SYNC_INTERVAL_MIN.
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_meta (
+                    wallet TEXT PRIMARY KEY,
+                    follow_count INTEGER NOT NULL DEFAULT 0,
+                    remark_count INTEGER NOT NULL DEFAULT 0,
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    tag_rank_json TEXT NOT NULL DEFAULT '{}',
+                    gmgn_created_at INTEGER NOT NULL DEFAULT 0,
+                    fund_from_address TEXT NOT NULL DEFAULT '',
+                    realized_profit_7d REAL NOT NULL DEFAULT 0,
+                    pnl_7d REAL NOT NULL DEFAULT 0,
+                    buy_7d INTEGER NOT NULL DEFAULT 0,
+                    sell_7d INTEGER NOT NULL DEFAULT 0,
+                    balance REAL NOT NULL DEFAULT 0,
+                    total_profit REAL NOT NULL DEFAULT 0,
+                    total_profit_pnl REAL NOT NULL DEFAULT 0,
+                    all_pnl REAL NOT NULL DEFAULT 0,
+                    last_active_timestamp INTEGER NOT NULL DEFAULT 0,
+                    risk_json TEXT NOT NULL DEFAULT '{}',
+                    has_data INTEGER NOT NULL DEFAULT 0,
+                    fetched_at TEXT NOT NULL,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (wallet) REFERENCES wallets(address)
+                        ON DELETE CASCADE
+                )
+            """)
+            # Computed wallet quality score (0-100) and its breakdown.
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_score (
+                    wallet TEXT PRIMARY KEY,
+                    score REAL NOT NULL DEFAULT 0,
+                    grade TEXT NOT NULL DEFAULT '',
+                    detail_json TEXT NOT NULL DEFAULT '{}',
+                    window_days INTEGER NOT NULL DEFAULT 90,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (wallet) REFERENCES wallets(address)
+                        ON DELETE CASCADE
+                )
+            """)
             c.execute("""
                 CREATE TABLE IF NOT EXISTS sync_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,6 +287,11 @@ class Database:
                 if name not in cols:
                     conn.execute(
                         f"ALTER TABLE daily_profit ADD COLUMN {name} {decl}")
+            meta_cols = {r["name"] for r in conn.execute(
+                "PRAGMA table_info(wallet_meta)").fetchall()}
+            if "has_data" not in meta_cols:
+                conn.execute("ALTER TABLE wallet_meta ADD COLUMN "
+                             "has_data INTEGER NOT NULL DEFAULT 0")
 
     # ============ wallets ============
 
@@ -302,6 +390,8 @@ class Database:
             conn.execute("DELETE FROM daily_profit WHERE wallet=?", (address,))
             conn.execute("DELETE FROM sync_log WHERE wallet=?", (address,))
             conn.execute("DELETE FROM sync_state WHERE wallet=?", (address,))
+            conn.execute("DELETE FROM wallet_meta WHERE wallet=?", (address,))
+            conn.execute("DELETE FROM wallet_score WHERE wallet=?", (address,))
             cur = conn.execute("DELETE FROM wallets WHERE address=?", (address,))
             return cur.rowcount
 
@@ -309,6 +399,202 @@ class Database:
         with self._conn() as conn:
             conn.execute("UPDATE wallets SET enabled=?, updated_at=? WHERE address=?",
                          (1 if enabled else 0, _now_iso(), address))
+
+    # ============ wallet_meta (GMGN public stats) ============
+
+    def upsert_wallet_meta(self, wallet: str, meta: Dict[str, Any]) -> None:
+        """Store a complete wallet_common_stat + smartmoney snapshot."""
+        now = _now_iso()
+        tags = json.dumps(meta.get("tags") or [], ensure_ascii=False)
+        tag_rank = json.dumps(meta.get("tag_rank") or {}, ensure_ascii=False)
+        risk = json.dumps(meta.get("risk") or {}, ensure_ascii=False)
+        fetched_at = meta.get("fetched_at") or now
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT INTO wallet_meta (
+                    wallet, follow_count, remark_count, tags_json, tag_rank_json,
+                    gmgn_created_at, fund_from_address, realized_profit_7d,
+                    pnl_7d, buy_7d, sell_7d, balance, total_profit,
+                    total_profit_pnl, all_pnl, last_active_timestamp,
+                    risk_json, has_data, fetched_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(wallet) DO UPDATE SET
+                    follow_count=excluded.follow_count,
+                    remark_count=excluded.remark_count,
+                    tags_json=excluded.tags_json,
+                    tag_rank_json=excluded.tag_rank_json,
+                    gmgn_created_at=excluded.gmgn_created_at,
+                    fund_from_address=excluded.fund_from_address,
+                    realized_profit_7d=excluded.realized_profit_7d,
+                    pnl_7d=excluded.pnl_7d,
+                    buy_7d=excluded.buy_7d,
+                    sell_7d=excluded.sell_7d,
+                    balance=excluded.balance,
+                    total_profit=excluded.total_profit,
+                    total_profit_pnl=excluded.total_profit_pnl,
+                    all_pnl=excluded.all_pnl,
+                    last_active_timestamp=excluded.last_active_timestamp,
+                    risk_json=excluded.risk_json,
+                    has_data=excluded.has_data,
+                    fetched_at=excluded.fetched_at,
+                    last_error=excluded.last_error
+            """, (
+                wallet,
+                int(meta.get("follow_count") or 0),
+                int(meta.get("remark_count") or 0),
+                tags, tag_rank,
+                int(meta.get("created_at") or 0),
+                str(meta.get("fund_from_address") or ""),
+                float(meta.get("realized_profit_7d") or 0),
+                float(meta.get("pnl_7d") or 0),
+                int(meta.get("buy_7d") or 0),
+                int(meta.get("sell_7d") or 0),
+                float(meta.get("balance") or 0),
+                float(meta.get("total_profit") or 0),
+                float(meta.get("total_profit_pnl") or 0),
+                float(meta.get("all_pnl") or 0),
+                int(meta.get("last_active_timestamp") or 0),
+                risk, 1, fetched_at,
+                str(meta.get("last_error") or "")[:500],
+            ))
+
+    def mark_wallet_meta_error(self, wallet: str, error: str) -> None:
+        """Record a failed fetch without erasing the last good snapshot."""
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT INTO wallet_meta (wallet, has_data, fetched_at, last_error)
+                VALUES (?, 0, ?, ?)
+                ON CONFLICT(wallet) DO UPDATE SET
+                    fetched_at=excluded.fetched_at,
+                    last_error=excluded.last_error
+            """, (wallet, _now_iso(), str(error)[:500]))
+
+    def wallet_meta_due(self, wallet: str, stale_minutes: int) -> bool:
+        cutoff = (datetime.now(timezone.utc) - timedelta(
+            minutes=max(stale_minutes, 1))).isoformat()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT fetched_at FROM wallet_meta WHERE wallet=?",
+                (wallet,)).fetchone()
+            return (row is None or not row["fetched_at"]
+                    or row["fetched_at"] < cutoff)
+
+    def get_wallet_meta(self, wallet: str) -> Optional[Dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM wallet_meta WHERE wallet=?", (wallet,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        return {
+            "follow_count": int(d.get("follow_count") or 0),
+            "remark_count": int(d.get("remark_count") or 0),
+            "tags": _json_load(d.get("tags_json"), []),
+            "tag_rank": _json_load(d.get("tag_rank_json"), {}),
+            "created_at": int(d.get("gmgn_created_at") or 0),
+            "fund_from_address": d.get("fund_from_address") or "",
+            "realized_profit_7d": float(d.get("realized_profit_7d") or 0),
+            "pnl_7d": float(d.get("pnl_7d") or 0),
+            "buy_7d": int(d.get("buy_7d") or 0),
+            "sell_7d": int(d.get("sell_7d") or 0),
+            "balance": float(d.get("balance") or 0),
+            "total_profit": float(d.get("total_profit") or 0),
+            "total_profit_pnl": float(d.get("total_profit_pnl") or 0),
+            "all_pnl": float(d.get("all_pnl") or 0),
+            "last_active_timestamp": int(d.get("last_active_timestamp") or 0),
+            "risk": _json_load(d.get("risk_json"), {}),
+            "has_data": int(d.get("has_data") or 0),
+            "fetched_at": d.get("fetched_at"),
+            "last_error": d.get("last_error") or "",
+        }
+
+    def list_wallets_with_meta(self, only_enabled: bool = False,
+                               limit: Optional[int] = None,
+                               offset: int = 0) -> List[Dict[str, Any]]:
+        where = "WHERE w.enabled=1" if only_enabled else ""
+        sql = f"""
+            SELECT w.*, {_META_SELECT}, {_SCORE_SELECT}
+            FROM wallets w
+            LEFT JOIN wallet_meta m ON m.wallet = w.address
+            LEFT JOIN wallet_score sc ON sc.wallet = w.address
+            {where}
+            ORDER BY w.created_at
+        """
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params += [max(limit, 1), max(offset, 0)]
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+
+    # ============ wallet_score ============
+
+    def get_daily_window(self, wallet: str, days: int = 90
+                         ) -> List[Dict[str, Any]]:
+        """Calendar rows inside the rolling scoring window."""
+        cutoff = _recent_cutoff(days)
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT date, realized_profit, gains, losses,
+                       win_sells, loss_sells, buy_count, sell_count
+                FROM daily_profit
+                WHERE wallet=? AND date>=? ORDER BY date
+            """, (wallet, cutoff)).fetchall()
+            return [dict(r) for r in rows]
+
+    def upsert_wallet_score(self, wallet: str,
+                            result: Dict[str, Any]) -> None:
+        detail = json.dumps(result, ensure_ascii=False)
+        with self._conn() as conn:
+            conn.execute("""
+                INSERT INTO wallet_score
+                    (wallet, score, grade, detail_json, window_days, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(wallet) DO UPDATE SET
+                    score=excluded.score,
+                    grade=excluded.grade,
+                    detail_json=excluded.detail_json,
+                    window_days=excluded.window_days,
+                    updated_at=excluded.updated_at
+            """, (wallet, float(result.get("score") or 0),
+                  str(result.get("grade") or ""), detail,
+                  int(result.get("window_days") or 90), _now_iso()))
+
+    def get_wallet_score(self, wallet: str) -> Optional[Dict[str, Any]]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM wallet_score WHERE wallet=?", (wallet,)
+            ).fetchone()
+        if not row:
+            return None
+        detail = _json_load(row["detail_json"], {})
+        return {
+            "value": round(float(row["score"] or 0), 1),
+            "grade": row["grade"] or "",
+            "window_days": int(row["window_days"] or 90),
+            "components": detail.get("components") or {},
+            "metrics": detail.get("metrics") or {},
+            "updated_at": row["updated_at"],
+        }
+
+    def list_wallets_missing_score(self, limit: int = 200
+                                   ) -> List[str]:
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT w.address FROM wallets w
+                LEFT JOIN wallet_score sc ON sc.wallet = w.address
+                WHERE w.enabled=1 AND sc.wallet IS NULL
+                  AND (
+                    EXISTS (SELECT 1 FROM daily_profit d
+                            WHERE d.wallet = w.address)
+                    OR EXISTS (SELECT 1 FROM wallet_meta m
+                               WHERE m.wallet = w.address)
+                  )
+                ORDER BY w.created_at
+                LIMIT ?
+            """, (max(limit, 1),)).fetchall()
+            return [r["address"] for r in rows]
 
     # ============ daily_profit ============
 
@@ -429,13 +715,6 @@ class Database:
             "pnl_7d": sum(d["realized_profit"] for d in recent_days),
         }
 
-    def get_all_summaries(self, month: str) -> List[Dict[str, Any]]:
-        """All enabled wallets in one aggregate query (no N+1)."""
-        rows = self.get_summaries_page(month, limit=-1, offset=0)
-        for row in rows:
-            row["month"] = month
-        return rows
-
     @staticmethod
     def _month_range(month: str) -> tuple:
         import calendar as _cal
@@ -476,6 +755,8 @@ class Database:
                        COALESCE(SUM(d.transfer_out_count), 0) AS transfer_out_count,
                        COALESCE(SUM(d.transfer_in_amount_usd), 0) AS transfer_in_amount_usd,
                        COALESCE(SUM(d.transfer_out_amount_usd), 0) AS transfer_out_amount_usd,
+                       {_META_SELECT},
+                       {_SCORE_SELECT},
                        {win_select},
                        COALESCE((
                            SELECT SUM(d7.realized_profit) FROM daily_profit d7
@@ -494,6 +775,8 @@ class Database:
                            WHERE d8.wallet = w.address
                        )) AS updated_at
                 FROM wallets w
+                LEFT JOIN wallet_meta m ON m.wallet = w.address
+                LEFT JOIN wallet_score sc ON sc.wallet = w.address
                 LEFT JOIN daily_profit d
                   ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
                 WHERE w.enabled = 1
@@ -515,10 +798,12 @@ class Database:
         """地址管理列表: 基础信息 + 累计/近7天盈利 + 胜率 + 最近同步时间."""
         cutoff_7d = _recent_cutoff(7)
         with self._conn() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT w.address AS address, w.label AS label,
                        w.enabled AS enabled,
                        w.created_at AS created_at, w.updated_at AS updated_at,
+                       {_META_SELECT},
+                       {_SCORE_SELECT},
                        COALESCE((
                            SELECT SUM(d7.realized_profit) FROM daily_profit d7
                            WHERE d7.wallet = w.address AND d7.date >= ?
@@ -547,6 +832,8 @@ class Database:
                            WHERE d9.wallet = w.address
                        )) AS last_synced_at
                 FROM wallets w
+                LEFT JOIN wallet_meta m ON m.wallet = w.address
+                LEFT JOIN wallet_score sc ON sc.wallet = w.address
                 ORDER BY w.created_at DESC, w.address ASC
                 LIMIT ? OFFSET ?
             """, (cutoff_7d, limit, offset)).fetchall()

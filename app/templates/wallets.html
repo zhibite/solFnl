@@ -61,8 +61,10 @@
             <thead>
                 <tr class="text-left text-gray-400 border-b border-gray-700/30 bg-gray-900/30">
                     <th class="px-6 py-3">地址</th>
+                    <th class="px-6 py-3 text-right" title="综合评分 0-100：盈利30 + 胜率20 + 稳定20 + 社交15 + 风险15">评分</th>
                     <th class="px-6 py-3 text-right">累计盈利</th>
-                    <th class="px-6 py-3 text-right">近7天盈利</th>
+                    <th class="px-6 py-3 text-right" title="来自 GMGN smartmoney 公开接口的 realized_profit_7d（USD）">7D盈利(GMGN)</th>
+                    <th class="px-6 py-3 text-right" title="来自 GMGN wallet_common_stat 的 follow_count / remark_count">被追踪/被备注</th>
                     <th class="px-6 py-3 text-right">胜率</th>
                     <th class="px-6 py-3 text-right">最近同步（北京）</th>
                     <th class="px-6 py-3 text-right">创建时间</th>
@@ -74,12 +76,30 @@
                 {% for w in wallets %}
                 <tr class="border-b border-gray-700/20 hover:bg-gray-700/20 transition">
                     <td class="px-6 py-3 font-mono text-xs text-gray-300">{{ w.address }}</td>
+                    <td class="px-6 py-3 text-right">
+                        {% if w.score_value is not none %}
+                        <div class="text-lg font-bold {% if w.score_value >= 80 %}text-success{% elif w.score_value >= 60 %}text-primary{% elif w.score_value >= 40 %}text-warning{% else %}text-danger{% endif %}">
+                            {{ "%.1f"|format(w.score_value) }}
+                        </div>
+                        <div class="text-xs text-gray-500">{{ w.score_grade }} · 100分制</div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                    </td>
                     <td class="px-6 py-3 text-right font-bold {% if w.total_pnl >= 0 %}text-success{% else %}text-danger{% endif %}">
                         {{ w.total_pnl|money }}
                         <div class="text-xs font-normal text-gray-500">{{ w.active_days }} 个交易日</div>
                     </td>
-                    <td class="px-6 py-3 text-right font-bold {% if w.pnl_7d >= 0 %}text-success{% else %}text-danger{% endif %}">
-                        {{ w.pnl_7d|money }}
+                    <td class="px-6 py-3 text-right text-xs">
+                        {% if w.meta_fetched_at %}
+                        <div class="font-bold {% if (w.meta_realized_profit_7d or 0) >= 0 %}text-success{% else %}text-danger{% endif %}">
+                            {{ (w.meta_realized_profit_7d or 0)|money }}
+                        </div>
+                        <div class="text-gray-500">{{ "%.2f"|format((w.meta_pnl_7d or 0) * 100) }}% · 买 {{ w.meta_buy_7d or 0 }} / 卖 {{ w.meta_sell_7d or 0 }}</div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
+                    </td>
+                    <td class="px-6 py-3 text-right text-gray-300 text-xs">
+                        {% if w.meta_fetched_at %}
+                        <div>追踪 {{ w.meta_follow_count or 0 }} / 备注 {{ w.meta_remark_count or 0 }}</div>
+                        {% else %}<span class="text-gray-500">-</span>{% endif %}
                     </td>
                     <td class="px-6 py-3 text-right text-gray-300">
                         {% if w.win_rate is not none %}{{ "%.1f"|format(w.win_rate * 100) }}%{% else %}-{% endif %}
@@ -100,7 +120,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="8" class="px-6 py-12 text-center text-gray-500">
+                <tr><td colspan="10" class="px-6 py-12 text-center text-gray-500">
                     暂无地址 · 上方添加地址或导入 JSON 来开始监控钱包
                 </td></tr>
                 {% endfor %}

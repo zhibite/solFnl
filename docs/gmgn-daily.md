@@ -125,7 +125,62 @@ https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 - 响应里没有钱包地址字段，所以必须一个钱包一个请求。
 - `daily_profit` 表里还有一列 `last_trade_time`（Debot 遗留），GMGN 源固定写 `0`。
 
-## 四、实测行为与边界
+## 四、钱包公开统计接口（被追踪 / 被备注 / 7D）
+
+同步钱包时我们还会额外调用两个公开接口（无需登录）：
+
+```http
+GET https://gmgn.ai/api/v1/wallet_common_stat/sol/<wallet>
+GET https://gmgn.ai/defi/quotation/v1/smartmoney/sol/wallet/<wallet>
+```
+
+`wallet_common_stat` 返回：
+
+```json
+{
+  "follow_count": 5364,
+  "remark_count": 3528,
+  "tags": ["top_followed"],
+  "tag_rank": {"top_followed": 0},
+  "created_at": 1762440674,
+  "fund_from_address": "F6DxYFix..."
+}
+```
+
+`smartmoney/wallet` 返回：
+
+```json
+{
+  "realized_profit_7d": 31140.98,
+  "pnl_7d": 0.0171,
+  "buy_7d": 7959,
+  "sell_7d": 7975,
+  "balance": "117.467",
+  "total_profit": 2245598.91,
+  "total_profit_pnl": 0.0278,
+  "all_pnl": 0.0278,
+  "risk": {"token_honeypot": "0", "...": "..."}
+}
+```
+
+- `follow_count` 对应钱包页「被追踪」，`remark_count` 对应「被备注」
+- `realized_profit_7d` 单位是 **USD**（前端按 SOL 价格换算后显示为 +303.82 SOL）
+- `pnl_7d` 是收益率小数（`0.0171` = 1.71%）
+- 这些数据存进 `wallet_meta` 表，外部 API 以 `meta` 对象返回
+
+需要登录态的接口：
+
+```http
+GET https://gmgn.ai/pf/api/v1/wallet/sol/<wallet>/profit_stat/7d
+```
+
+未带 token 返回 `401 empty token`。前端 PnL 卡片会把 `wallet_common_stat` 和这个接口合并，
+从中取 `total_fee` / `total_fee_usd` / `gas_cost` / `avg_holding_peroid` /
+`history_bought_cost` / `total_volume` 等。**7D 手续费目前没有接入**，因为需要 GMGN 登录 token。
+
+探测脚本：[`tools/probe_gmgn_wallet.py`](../tools/probe_gmgn_wallet.py)
+
+## 五、实测行为与边界
 
 | 行为 | 实测结果 |
 |---|---|
@@ -150,7 +205,7 @@ https://gmgn.ai/pf/api/v1/wallets/sol/daily_profits
 - 线上该地址 10 月合计与 GMGN 直查只差当天：线上最后一次同步为 `2,369.92`，
   GMGN 当前值为 `4,021.50`，说明接口数据是实时变化的，不是历史数据错误。
 
-## 五、与 Debot 的差异（历史参考）
+## 六、与 Debot 的差异（历史参考）
 
 Debot 数据源目前已暂停，以下对比仅作为历史口径参考。同一钱包 2026-09 的对比：
 
@@ -162,18 +217,20 @@ Debot 数据源目前已暂停，以下对比仅作为历史口径参考。同�
 `debot_client.py` 和 `profit_source.py` 里的 Debot 代码保留，但 `_source_manager()`
 固定 `enable_debot=False`，同步不会再走 Debot。
 
-## 六、代码与工具
+## 七、代码与工具
 
 - 客户端实现：`app/gmgn_client.py`
   - `GMGNDailyClient.fetch_daily(wallet, start_at, end_at)`
   - `GMGNDailyClient.fetch_daily_many(wallets, start_at, end_at)`（内部串行逐个查）
   - `normalize(item)`：GMGN 字段 → 内部字段
+  - `fetch_wallet_meta(wallet, chain)`：合并 `wallet_common_stat` + `smartmoney`
 - 月份适配：`app/profit_source.py` 的 `GMGNSource.fetch_month(wallet, "YYYY-MM")`
-- 同步入口：`app/app.py` 的 `sync_one_wallet()`
+- 同步入口：`app/app.py` 的 `sync_one_wallet()` / `sync_wallet_meta()`
 - 探测脚本（历史，非生产）：`tools/probe_gmgn_daily.py` ~ `tools/probe_gmgn_daily8.py`
+- 钱包元数据探测：`tools/probe_gmgn_wallet.py`
 - 冒烟/验证脚本：`tools/test_gmgn_client.py`、`tools/verify_server_clients.py`
 
-## 七、探测历史（简）
+## 八、探测历史（简）
 
 | 脚本 | 结论 |
 |---|---|

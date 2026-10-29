@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 BASE_URL = "https://gmgn.ai"
 DAILY_PROFITS_PATH = "/pf/api/v1/wallets/{chain}/daily_profits"
+COMMON_STAT_PATH = "/api/v1/wallet_common_stat/{chain}/{wallet}"
+SMARTMONEY_PATH = "/defi/quotation/v1/smartmoney/{chain}/wallet/{wallet}"
 
 #: 一年秒数 — 接口硬限制: time range must be less than 1 year
 MAX_RANGE_SECONDS = 365 * 24 * 3600
@@ -153,6 +155,27 @@ class GMGNDailyClient:
             raise GMGNError(code, str(msg))
         return payload.get("data") or {}
 
+    def _get(self, path: str) -> Dict[str, Any]:
+        req = urllib.request.Request(
+            f"{self.base_url}{path}", headers=HEADERS, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            raise GMGNError(-e.code, f"HTTP {e.code}: {e.read()[:200]!r}")
+        except Exception as e:  # noqa: BLE001
+            raise GMGNError(-1, f"{type(e).__name__}: {e}")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise GMGNError(-1, f"invalid JSON: {e}, body={raw[:200]!r}")
+        code = payload.get("code", -1)
+        if code != 0:
+            msg = (payload.get("message") or payload.get("reason")
+                   or payload.get("msg") or "unknown")
+            raise GMGNError(code, str(msg))
+        return payload.get("data") or {}
+
     def fetch_daily(self, wallet: str, start_at: int,
                     end_at: Optional[int] = None) -> List[Dict[str, Any]]:
         """拉一个钱包的每日盈利.
@@ -188,3 +211,51 @@ class GMGNDailyClient:
         for w in wallets:
             out[w] = self.fetch_daily(w, start_at, end_at)
         return out
+
+
+def fetch_wallet_meta(wallet: str, chain: str = "sol",
+                      timeout: int = 25) -> Dict[str, Any]:
+    """Fetch public wallet-level stats from two GMGN endpoints.
+
+    - /api/v1/wallet_common_stat/...  -> follow_count, remark_count, tags
+    - /defi/quotation/v1/smartmoney/... -> 7d realized profit / buy / sell,
+      balance, risk, etc. (no auth)
+
+    Both endpoints are required: on any failure this raises so the caller
+    keeps the previous snapshot instead of overwriting it with zeros.
+    """
+    client = GMGNDailyClient(chain=chain, timeout=timeout)
+    errors: List[str] = []
+    common: Dict[str, Any] = {}
+    smart: Dict[str, Any] = {}
+    try:
+        common = client._get(COMMON_STAT_PATH.format(
+            chain=client.chain, wallet=wallet))
+    except GMGNError as e:
+        errors.append(f"common_stat: {e}")
+    try:
+        smart = client._get(SMARTMONEY_PATH.format(
+            chain=client.chain, wallet=wallet))
+    except GMGNError as e:
+        errors.append(f"smartmoney: {e}")
+    if errors:
+        raise GMGNError(-1, "; ".join(errors))
+
+    return {
+        "follow_count": _to_int(common.get("follow_count")),
+        "remark_count": _to_int(common.get("remark_count")),
+        "tags": common.get("tags") or [],
+        "tag_rank": common.get("tag_rank") or {},
+        "created_at": _to_int(common.get("created_at")),
+        "fund_from_address": common.get("fund_from_address") or "",
+        "realized_profit_7d": _to_float(smart.get("realized_profit_7d")),
+        "pnl_7d": _to_float(smart.get("pnl_7d")),
+        "buy_7d": _to_int(smart.get("buy_7d")),
+        "sell_7d": _to_int(smart.get("sell_7d")),
+        "balance": _to_float(smart.get("balance")),
+        "total_profit": _to_float(smart.get("total_profit")),
+        "total_profit_pnl": _to_float(smart.get("total_profit_pnl")),
+        "all_pnl": _to_float(smart.get("all_pnl")),
+        "last_active_timestamp": _to_int(smart.get("last_active_timestamp")),
+        "risk": smart.get("risk") or {},
+    }

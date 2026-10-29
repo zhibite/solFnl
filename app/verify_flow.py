@@ -58,8 +58,21 @@ gmgn_day = normalize({
 })
 db.upsert_wallet(gmgn_wallet, label="gmgn-sample")
 db.upsert_days(gmgn_wallet, [gmgn_day], source="gmgn")
+db.upsert_wallet_meta(gmgn_wallet, {
+    "follow_count": 5364,
+    "remark_count": 3528,
+    "tags": ["top_followed"],
+    "realized_profit_7d": 31140.98,
+    "pnl_7d": 0.0171,
+    "buy_7d": 7959,
+    "sell_7d": 7975,
+    "balance": 117.47,
+    "risk": {"token_honeypot": "0"},
+})
 print("gmgn sample seeded, transfer_in_amount_usd:",
       gmgn_day["transfer_in_amount_usd"])
+score = m.recompute_wallet_score(gmgn_wallet)
+print("wallet score:", score["score"], score["grade"])
 
 
 async def main():
@@ -89,6 +102,20 @@ async def main():
         assert abs(d0["transfer_in_amount_usd"] - 31915.2519485) < 1e-4
         print("api gmgn day: transfer_in_count=", d0["transfer_in_count"],
               "transfer_in_amount_usd=", round(d0["transfer_in_amount_usd"], 2))
+
+        r = (await c.get(f"/api/profit/{gmgn_wallet}?month=2026-10")).json()
+        assert r["meta"]["follow_count"] == 5364
+        assert r["meta"]["realized_profit_7d"] == 31140.98
+        print("api meta: follow=", r["meta"]["follow_count"],
+              "remark=", r["meta"]["remark_count"],
+              "7d=", r["meta"]["realized_profit_7d"])
+        assert r["score"]["value"] == score["score"]
+        assert r["score"]["grade"] in ("A", "B", "C", "D")
+        print("api score:", r["score"]["value"], r["score"]["grade"])
+        print("detail-gmgn:", (await c.get(
+            f"/wallet/{gmgn_wallet}?month=2026-10")).status_code)
+        print("profit-gmgn:", (await c.get(
+            f"/profit/{gmgn_wallet}?month=2026-10")).status_code)
 
         r = (await c.get("/api/profit?month=2026-09")).json()
         print("api all: success=", r["success"],

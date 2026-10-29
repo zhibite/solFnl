@@ -9,10 +9,13 @@ Env:  DATABASE_PATH (default /data/gmgndaily.db)
       HISTORY_SYNC_INTERVAL_MIN (default 1440)
       SYNC_TICK_SECONDS (default 60), SYNC_BATCH_SIZE (default 60)
       SYNC_MAX_REQUESTS_PER_TICK (default 60)
+      META_SYNC_INTERVAL_MIN (default 1440)
+      SCORE_WINDOW_DAYS (default 90)
       SYNC_LOG_RETENTION_DAYS (default 7), TRACK_MAX_CONCURRENT (default 4)
 """
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -32,7 +35,9 @@ from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
 from database import get_db
+from gmgn_client import fetch_wallet_meta
 from profit_source import ProfitSourceManager
+from scoring import compute_wallet_score
 from validators import is_valid_month, is_valid_sol_address
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO,
@@ -50,10 +55,15 @@ SYNC_BATCH_SIZE = max(int(os.getenv("SYNC_BATCH_SIZE", "60")), 1)
 SYNC_MAX_REQUESTS_PER_TICK = max(
     int(os.getenv("SYNC_MAX_REQUESTS_PER_TICK", "60")), 1)
 SYNC_LOG_RETENTION_DAYS = max(int(os.getenv("SYNC_LOG_RETENTION_DAYS", "7")), 1)
+META_SYNC_INTERVAL_MIN = max(
+    int(os.getenv("META_SYNC_INTERVAL_MIN", "1440")), 1)
+SCORE_WINDOW_DAYS = max(int(os.getenv("SCORE_WINDOW_DAYS", "90")), 1)
 TRACK_MAX_CONCURRENT = max(int(os.getenv("TRACK_MAX_CONCURRENT", "4")), 1)
 CHAIN = os.getenv("CHAIN", "solana")
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_ITEMS = 50000
+# Public list endpoints return at most this many wallets per request.
+MAX_LIST_LIMIT = 100
 
 AUTH_USERNAME = "zengsw"
 # No hard-coded default password: a missing/empty env gets a one-off random
@@ -112,11 +122,12 @@ def require_login(request: Request):
 # app.router.lifespan_context after the fact is ignored in FastAPI>=0.115).
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _sync_task
+    global _sync_task, _score_task
     _sync_task = asyncio.create_task(_sync_loop())
+    _score_task = asyncio.create_task(_score_backfill_loop())
     log.info("[START] gmgndaily ready")
     yield
-    for task in (_sync_task, _full_sync_task):
+    for task in (_sync_task, _full_sync_task, _score_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -172,6 +183,79 @@ def _fmt_money(value: Any, digits: int = 2) -> str:
         return f"{float(value):,.{digits}f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _json_load(value: Any, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pop_meta(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Move flat `meta_*` columns from a list row into a nested meta object."""
+    raw: Dict[str, Any] = {}
+    for key in list(row.keys()):
+        if key.startswith("meta_"):
+            raw[key[5:]] = row.pop(key)
+    if not raw or raw.get("fetched_at") is None:
+        return None
+    return {
+        "follow_count": _as_int(raw.get("follow_count")),
+        "remark_count": _as_int(raw.get("remark_count")),
+        "tags": _json_load(raw.get("tags_json"), []),
+        "tag_rank": _json_load(raw.get("tag_rank_json"), {}),
+        "created_at": _as_int(raw.get("gmgn_created_at")),
+        "fund_from_address": raw.get("fund_from_address") or "",
+        "realized_profit_7d": _as_float(raw.get("realized_profit_7d")),
+        "pnl_7d": _as_float(raw.get("pnl_7d")),
+        "buy_7d": _as_int(raw.get("buy_7d")),
+        "sell_7d": _as_int(raw.get("sell_7d")),
+        "balance": _as_float(raw.get("balance")),
+        "total_profit": _as_float(raw.get("total_profit")),
+        "total_profit_pnl": _as_float(raw.get("total_profit_pnl")),
+        "all_pnl": _as_float(raw.get("all_pnl")),
+        "last_active_timestamp": _as_int(raw.get("last_active_timestamp")),
+        "risk": _json_load(raw.get("risk_json"), {}),
+        "has_data": _as_int(raw.get("has_data")),
+        "fetched_at": raw.get("fetched_at"),
+        "last_error": raw.get("last_error") or "",
+    }
+
+
+def _pop_score(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Move flat `score_*` columns from a list row into a nested score object."""
+    raw: Dict[str, Any] = {}
+    for key in list(row.keys()):
+        if key.startswith("score_"):
+            raw[key[6:]] = row.pop(key)
+    if not raw or raw.get("value") is None:
+        return None
+    detail = _json_load(raw.get("detail_json"), {})
+    return {
+        "value": round(_as_float(raw.get("value")), 1),
+        "grade": raw.get("grade") or "",
+        "window_days": _as_int(raw.get("window_days")) or SCORE_WINDOW_DAYS,
+        "components": detail.get("components") or {},
+        "metrics": detail.get("metrics") or {},
+        "updated_at": raw.get("updated_at"),
+    }
 
 
 _BEIJING_TZ = timezone(timedelta(hours=8))
@@ -233,6 +317,20 @@ def _month_param(request: Request) -> str:
     return month if is_valid_month(month) else _target_months(0)[0]
 
 
+def _limit_offset(request: Request) -> tuple[int, int]:
+    """Pagination for public list APIs: limit clamped to 1..100."""
+    try:
+        limit = int(request.query_params.get("limit", MAX_LIST_LIMIT))
+    except (TypeError, ValueError):
+        limit = MAX_LIST_LIMIT
+    limit = max(1, min(limit, MAX_LIST_LIMIT))
+    try:
+        offset = int(request.query_params.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    return limit, max(0, offset)
+
+
 # ============ sync engine ============
 _sync_state: Dict[str, Any] = {
     "running": False,
@@ -243,6 +341,7 @@ _sync_state: Dict[str, Any] = {
 }
 _sync_task: Optional[asyncio.Task] = None
 _full_sync_task: Optional[asyncio.Task] = None
+_score_task: Optional[asyncio.Task] = None
 
 # Bounds concurrent /api/track syncs so public callers can't spawn unbounded
 # worker threads (each call may make up to 3 upstream requests).
@@ -262,6 +361,35 @@ def _begin_sync() -> bool:
 
 def _end_sync() -> None:
     _sync_state["running"] = False
+
+
+def recompute_wallet_score(wallet: str) -> Dict[str, Any]:
+    """Recompute and persist the 0-100 wallet quality score."""
+    db = get_db()
+    days = db.get_daily_window(wallet, SCORE_WINDOW_DAYS)
+    meta = db.get_wallet_meta(wallet)
+    result = compute_wallet_score(days, meta, SCORE_WINDOW_DAYS)
+    db.upsert_wallet_score(wallet, result)
+    return result
+
+
+def sync_wallet_meta(wallet: str) -> Dict[str, Any]:
+    """Fetch and store public GMGN wallet stats (follow/remark + 7d)."""
+    db = get_db()
+    try:
+        meta = fetch_wallet_meta(wallet, chain=CHAIN)
+        db.upsert_wallet_meta(wallet, meta)
+        partial = meta.get("last_error") or ""
+        if partial:
+            log.warning("[META] %s partial: %s", wallet[:8], partial)
+        return {"wallet": wallet, "ok": True, "partial_error": partial}
+    except Exception as e:
+        log.warning("[META] %s failed: %s", wallet[:8], e)
+        try:
+            db.mark_wallet_meta_error(wallet, str(e))
+        except Exception:
+            pass
+        return {"wallet": wallet, "ok": False, "error": str(e)}
 
 
 def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
@@ -291,7 +419,19 @@ def sync_one_wallet(wallet: str, months: List[str]) -> Dict[str, Any]:
                               "error_code": code})
             log.warning("[SYNC] %s/%s failed: %s", wallet[:8], month, err_msg)
 
-    return {"wallet": wallet, "total_days": total_days, "months": per_month}
+    meta_synced = False
+    if db.wallet_meta_due(wallet, META_SYNC_INTERVAL_MIN):
+        meta_synced = bool(sync_wallet_meta(wallet).get("ok"))
+
+    score = None
+    try:
+        score = recompute_wallet_score(wallet)
+    except Exception as e:
+        log.warning("[SCORE] %s failed: %s", wallet[:8], e)
+
+    return {"wallet": wallet, "total_days": total_days, "months": per_month,
+            "meta": db.get_wallet_meta(wallet), "meta_synced": meta_synced,
+            "score": score}
 
 
 def _session_expired(result: Dict[str, Any]) -> bool:
@@ -315,6 +455,8 @@ def _summarize_results(results: List[Dict[str, Any]], months: List[str],
         "failed": len(results) - ok_wallets,
         "total_days": sum(r.get("total_days", 0) for r in results),
         "requests": sum(len(r.get("months", [])) for r in results),
+        "meta_updated": sum(1 for r in results if r.get("meta_synced")),
+        "scored": sum(1 for r in results if r.get("score")),
         "session_expired": session_expired,
         "errors": errors,
     }
@@ -402,8 +544,8 @@ def sync_due_batch(limit: Optional[int] = None) -> Dict[str, Any]:
     targets = _trim_targets_by_budget(targets, SYNC_MAX_REQUESTS_PER_TICK)
     if not targets:
         return {"months": months, "wallets": 0, "ok": 0, "failed": 0,
-                "total_days": 0, "requests": 0,
-                "session_expired": False, "errors": []}
+                "total_days": 0, "requests": 0, "meta_updated": 0,
+                "scored": 0, "session_expired": False, "errors": []}
     summary = _sync_wallet_list(targets, months)
     _sync_state["last_run"] = datetime.now(timezone.utc).isoformat()
     _sync_state["last_result"] = summary
@@ -446,6 +588,30 @@ async def _sync_loop():
         await asyncio.sleep(max(1.0, SYNC_TICK_SECONDS - elapsed))
 
 
+async def _score_backfill_loop():
+    """One-time-ish backfill for wallets that already have stored data."""
+    log.info("[SCORE] backfill queue start")
+    while True:
+        try:
+            addresses = await asyncio.to_thread(
+                get_db().list_wallets_missing_score, 200)
+            if not addresses:
+                await asyncio.sleep(3600)
+                continue
+            for address in addresses:
+                try:
+                    await asyncio.to_thread(recompute_wallet_score, address)
+                except Exception as e:
+                    log.warning("[SCORE] %s failed: %s", address[:8], e)
+            log.info("[SCORE] backfilled %d wallets", len(addresses))
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception("[SCORE] backfill error: %s", e)
+            await asyncio.sleep(60)
+
+
 def _safe_next(next_url: str) -> str:
     """Only allow local absolute paths as post-login redirect targets."""
     return next_url if (next_url.startswith("/")
@@ -481,6 +647,7 @@ def home(request: Request):
         "total": float(total),
         "sync_stats": sync_stats,
         "months": months,
+        "score_window": SCORE_WINDOW_DAYS,
         "pagination": {
             "page": page,
             "per_page": per_page,
@@ -540,6 +707,7 @@ def wallet_detail(request: Request, address: str):
         "summary": summary,
         "month": month,
         "months": _target_months(6),
+        "score": db.get_wallet_score(address),
     })
     context["request"] = request
     return templates.TemplateResponse(request, "detail.html", context)
@@ -578,6 +746,7 @@ def profit_page(request: Request, address: str):
         "loss_days": loss_days,
         "best_day": best_day,
         "worst_day": worst_day,
+        "score": db.get_wallet_score(address),
         "chart_dates": [_ts_to_date(d["date"]) for d in days],
         "chart_pnls": [d["realized_profit"] for d in days],
     })
@@ -592,6 +761,8 @@ def config_page(request: Request):
         "title": "配置",
         "interval": SYNC_INTERVAL_MIN,
         "history_interval": HISTORY_SYNC_INTERVAL_MIN,
+        "meta_interval": META_SYNC_INTERVAL_MIN,
+        "score_window": SCORE_WINDOW_DAYS,
         "months_back": SYNC_MONTHS_BACK,
         "batch_size": SYNC_BATCH_SIZE,
         "max_requests": SYNC_MAX_REQUESTS_PER_TICK,
@@ -836,12 +1007,15 @@ async def api_sync_wallet(request: Request):
     ok_months = [m for m in res["months"] if "error" not in m]
     if not ok_months:
         return {"success": False, "message": "sync failed",
-                "results": res["months"]}
+                "results": res["months"], "meta": res.get("meta"),
+                "score": res.get("score")}
     latest = db.get_recent_daily(address, days=7)
     return {"success": True, "wallet": address,
             "total_days": res["total_days"],
             "months": [m["month"] for m in ok_months],
             "results": res["months"],
+            "meta": res.get("meta"),
+            "score": res.get("score"),
             "sync_stats": db.get_sync_stats(),
             "pnl_7d": sum(d["realized_profit"] for d in latest)}
 
@@ -886,7 +1060,9 @@ async def api_track(request: Request):
             return {"success": False, "wallet": address,
                     "added": not existed,
                     "message": "server busy, retry later",
-                    "retry_after_seconds": 30}
+                    "retry_after_seconds": 30,
+                    "meta": db.get_wallet_meta(address),
+                    "score": db.get_wallet_score(address)}
         _track_inflight += 1
     try:
         res = await asyncio.to_thread(sync_one_wallet, address, months)
@@ -895,6 +1071,8 @@ async def api_track(request: Request):
         return {"success": False, "wallet": address, "added": not existed,
                 "months": months,
                 "message": f"wallet saved but sync failed: {e}",
+                "meta": db.get_wallet_meta(address),
+                "score": db.get_wallet_score(address),
                 "profit_url": f"/profit/{address}"}
     finally:
         async with _track_lock:
@@ -908,6 +1086,8 @@ async def api_track(request: Request):
         return {"success": False, "wallet": address, "added": not existed,
                 "months": months, "results": res["months"],
                 "message": f"wallet saved but sync failed: {errs[:300]}",
+                "meta": res.get("meta"),
+                "score": res.get("score"),
                 "profit_url": f"/profit/{address}"}
 
     first_ok = ok_months[0]["month"]
@@ -915,6 +1095,8 @@ async def api_track(request: Request):
     log.info("[TRACK] %s added=%s sync=%s", address[:10], not existed, res)
     return {"success": True, "wallet": address, "added": not existed,
             "months": months, "results": res["months"], "summary": summary,
+            "meta": res.get("meta"),
+            "score": res.get("score"),
             "profit_url": f"/profit/{address}?month={first_ok}"}
 
 
@@ -922,8 +1104,8 @@ async def api_track(request: Request):
 def api_profit(address: str, month: Optional[str] = None):
     """Daily profit rows of one wallet. month='YYYY-MM' optional.
 
-    三态返回（HTTP 均为 200，用 status 字段区分）：
-      ok              - 地址存在且有盈利数据，直接返回 summary + days
+    状态返回（HTTP 均为 200，用 status 字段区分）：
+      ok              - 地址存在且有盈利数据，直接返回 summary + days + meta
       pending         - 地址存在但要查的数据还没有，等后台同步完成后才有
       not_found       - 地址不在跟踪列表里，外部方需先调 POST /api/track 登记
       invalid_address - 地址格式非法或月份格式错误，无法处理
@@ -995,6 +1177,8 @@ def api_profit(address: str, month: Optional[str] = None):
                     "retry_after_seconds": max(SYNC_INTERVAL_MIN, 5) * 60,
                     "summary": None,
                     "days": [],
+                    "meta": db.get_wallet_meta(address),
+                    "score": db.get_wallet_score(address),
                 }
 
         # 计算汇总（不要重复查询 days）
@@ -1006,7 +1190,9 @@ def api_profit(address: str, month: Optional[str] = None):
 
         # 状态 1: 有数据
         return {"success": True, "status": "ok", "wallet": address,
-                "month": month, "summary": summary, "days": days}
+                "month": month, "summary": summary, "days": days,
+                "meta": db.get_wallet_meta(address),
+                "score": db.get_wallet_score(address)}
 
     except Exception as e:
         log.error(f"Error in api_profit({address}, month={month}): {e}", exc_info=True)
@@ -1019,17 +1205,38 @@ def api_profit(address: str, month: Optional[str] = None):
 
 
 @app.get("/api/profit")
-def api_profit_all(month: Optional[str] = None):
-    """Month summary across all enabled wallets. month='YYYY-MM'."""
+def api_profit_all(request: Request, month: Optional[str] = None):
+    """Month summary across enabled wallets. month='YYYY-MM'.
+
+    Paginated: limit defaults to 100 and is capped at 100. total_pnl is the
+    sum across all enabled wallets, not just the returned page.
+    """
     if month and not is_valid_month(month):
         return {"success": False,
                 "message": "invalid month format, use YYYY-MM"}
     db = get_db()
     month = month or _target_months(0)[0]
-    rows = db.get_all_summaries(month)
-    total = sum(r["realized_profit"] for r in rows)
-    return {"success": True, "month": month, "total_pnl": total,
-            "wallets": rows}
+    limit, offset = _limit_offset(request)
+    total_wallets = db.count_wallets(only_enabled=True)
+    rows = db.get_summaries_page(month, limit, offset)
+    for row in rows:
+        row["month"] = month
+        row["meta"] = _pop_meta(row)
+        row["score"] = _pop_score(row)
+    total = db.get_month_total(month)
+    return {
+        "success": True,
+        "month": month,
+        "total_pnl": total,
+        "wallets": rows,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "total": total_wallets,
+            "returned": len(rows),
+            "has_more": offset + len(rows) < total_wallets,
+        },
+    }
 
 
 @app.post("/api/wallets")
@@ -1061,12 +1268,31 @@ async def api_add_wallet_external(request: Request):
 
     wallet = db.get_wallet(address)
     log.info("[API] wallet added/updated: %s label=%s", address[:10], label)
-    return {"success": True, "wallet": dict(wallet) if wallet else {}}
+    return {"success": True, "wallet": dict(wallet) if wallet else {},
+            "meta": db.get_wallet_meta(address),
+            "score": db.get_wallet_score(address)}
 
 
 @app.get("/api/wallets")
-def api_list_wallets():
-    return {"success": True, "wallets": get_db().list_wallets()}
+def api_list_wallets(request: Request):
+    db = get_db()
+    limit, offset = _limit_offset(request)
+    total = db.count_wallets()
+    rows = db.list_wallets_with_meta(limit=limit, offset=offset)
+    for row in rows:
+        row["meta"] = _pop_meta(row)
+        row["score"] = _pop_score(row)
+    return {
+        "success": True,
+        "wallets": rows,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "returned": len(rows),
+            "has_more": offset + len(rows) < total,
+        },
+    }
 
 
 @app.get("/api/health")

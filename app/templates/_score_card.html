@@ -1,0 +1,29 @@
+{% if score %}
+<div class="bg-gray-800/30 rounded-xl p-6 border border-gray-700/50 card-hover mb-8">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="font-semibold">🏆 钱包评分</h2>
+            <p class="text-xs text-gray-400 mt-1">盈利 30 + 胜率 20 + 稳定 20 + 社交 15 + 风险 15</p>
+        </div>
+        <div class="text-right">
+            <span class="text-3xl font-bold {% if score.value >= 80 %}text-success{% elif score.value >= 60 %}text-primary{% elif score.value >= 40 %}text-warning{% else %}text-danger{% endif %}">{{ "%.1f"|format(score.value) }}</span>
+            <span class="text-gray-400 text-sm">/ 100 · {{ score.grade }}</span>
+        </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+        {% for key, label in [('profitability', '盈利'), ('win_rate', '胜率'), ('consistency', '稳定'), ('social', '社交'), ('risk', '风险')] %}
+        {% set c = score.components.get(key, {}) %}
+        <div class="bg-gray-900/30 rounded-lg p-3 border border-gray-700/30">
+            <div class="text-xs text-gray-400">{{ label }}</div>
+            <div class="font-bold text-gray-200">{{ c.get('score', 0) }} <span class="text-xs text-gray-500">/ {{ c.get('max', 0) }}</span></div>
+        </div>
+        {% endfor %}
+    </div>
+    <p class="text-xs text-gray-500 mt-3">
+        统计窗口 {{ score.window_days }} 天；评分随同步更新。
+        {% if score.metrics and not score.metrics.get('meta_available') %}
+        公开元数据尚未抓取，社交/风险/收益率部分暂为 0。
+        {% endif %}
+    </p>
+</div>
+{% endif %}

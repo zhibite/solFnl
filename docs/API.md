@@ -19,13 +19,26 @@
   **失败时 HTTP 状态码仍是 200**，请读 `message` 字段拿具体原因，不要只看状态码。
 - **地址校验**：base58 编码、32–44 个字符的 Solana 地址，正则 `^[1-9A-HJ-NP-Za-km-z]{32,44}$`。
 
+### 分页
+
+`GET /api/wallets` 和 `GET /api/profit` 是分页接口：
+
+- `limit`：默认 100，最大 100；传入超过 100 会按 100 处理
+- `offset`：默认 0
+- 响应带 `pagination`：
+  ```json
+  {"limit": 100, "offset": 0, "total": 15276, "returned": 100, "has_more": true}
+  ```
+- `GET /api/profit` 的 `total_pnl` 是**所有启用地址**的合计，不是当前页合计
+- 需要更多数据时继续增大 `offset`；单地址详情用 `GET /api/profit/<address>`
+
 ## 状态返回（查询单地址时）
 
 调用 `GET /api/profit/<address>` 时，外部方会得到以下四种状态之一（HTTP 均为 200，用 `status` 字段区分）：
 
 | Status | `success` | 语义 | 包含字段 | 外部方该怎么办 |
 |--------|-----------|------|---------|--------------|
-| `ok` | `true` | 地址存在且有盈利数据 | `summary` + `days[]` | 直接使用数据 |
+| `ok` | `true` | 地址存在且有盈利数据 | `summary` + `days[]` + `meta` + `score` | 直接使用数据 |
 | `pending` | `true` | 地址已登记但数据尚未就绪 | `retry_after_seconds` | 稍后重新查询（建议间隔见 `retry_after_seconds`） |
 | `not_found` | `false` | 地址未在跟踪列表中 | `action` 字段含 POST 指令 | 按 `action` 指示调用 POST /api/track 登记该地址 |
 | `invalid_address` | `false` | 地址或月份格式非法 | `message` 说明原因 | 检查地址（32-44 个 base58 字符）和月份（YYYY-MM 格式） |
@@ -34,6 +47,94 @@
 - 判断返回结果时，**务必用 `status` 字段而不是只看 `success`**。这样即使 API 返回格式变化，外部方的分支逻辑仍能正确执行。
 - `month` 参数必须是 `YYYY-MM` 格式（如 `2026-10`），不符合格式会返回 `invalid_address` 状态。
 
+## 钱包 meta（公开统计）
+
+`GET /api/wallets`、`GET /api/profit`、`GET /api/profit/<address>` 会附带 `meta` 对象（未抓取到时为 `null`）：
+
+```json
+{
+  "follow_count": 5364,
+  "remark_count": 3528,
+  "tags": ["top_followed"],
+  "tag_rank": {"top_followed": 0},
+  "created_at": 1762440674,
+  "fund_from_address": "F6DxYFix...",
+  "realized_profit_7d": 31140.98,
+  "pnl_7d": 0.0171,
+  "buy_7d": 7959,
+  "sell_7d": 7975,
+  "balance": 117.47,
+  "total_profit": 2245598.9,
+  "total_profit_pnl": 0.0278,
+  "all_pnl": 0.0278,
+  "last_active_timestamp": 1793234792,
+  "risk": {"token_honeypot": "0", "...": "..."},
+  "has_data": 1,
+  "fetched_at": "2026-10-29T00:00:00+00:00",
+  "last_error": ""
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `follow_count` | 被追踪人数（GMGN 钱包页「被追踪」） |
+| `remark_count` | 被备注人数（GMGN 钱包页「被备注」） |
+| `tags` / `tag_rank` | GMGN 钱包标签 |
+| `created_at` | GMGN 记录的创建时间（unix 秒） |
+| `realized_profit_7d` | GMGN 7D 已实现盈亏，**USD** |
+| `pnl_7d` | GMGN 7D 收益率，小数（`0.0171` = 1.71%） |
+| `buy_7d` / `sell_7d` | GMGN 7D 买入 / 卖出笔数 |
+| `balance` | 钱包余额，**SOL** |
+| `total_profit` / `total_profit_pnl` / `all_pnl` | GMGN 全周期统计 |
+| `last_active_timestamp` | 最近活跃时间（unix 秒） |
+| `risk` | GMGN 钓鱼/风险检测字段 |
+| `has_data` | 是否成功抓取过数据（1/0）；0 时评分把 meta 视为不可用 |
+| `fetched_at` | 本服务最近一次抓取该 meta 的时间 |
+| `last_error` | 最近一次抓取失败原因，成功时为空字符串 |
+
+> 数据直接来自 GMGN 公开接口（`wallet_common_stat` + `smartmoney`），不是本地按日汇总。
+> 刷新间隔由 `META_SYNC_INTERVAL_MIN` 控制；没有 meta 时返回 `null`，稍后同步后会填充。
+
+## 钱包评分 score（0-100）
+
+钱包相关接口同时返回 `score`（未计算时为 `null`）：
+
+```json
+{
+  "value": 66.2,
+  "grade": "B",
+  "window_days": 90,
+  "components": {
+    "profitability": {"score": 18.1, "max": 30},
+    "win_rate": {"score": 10.1, "max": 20, "value": 0.5015},
+    "consistency": {"score": 8.0, "max": 20},
+    "social": {"score": 15.0, "max": 15},
+    "risk": {"score": 15.0, "max": 15}
+  },
+  "metrics": {
+    "days": 28, "net_pnl": 1234.5, "win_rate": 0.5015,
+    "calendar_confidence": 0.933,
+    "follow_count": 5364, "remark_count": 3528,
+    "meta_available": true
+  },
+  "updated_at": "2026-10-29T00:00:00+00:00"
+}
+```
+
+| 维度 | 分值 | 依据 |
+|---|---:|---|
+| 盈利 profitability | 30 | GMGN 全周期已实现利润（对数，15）+ 7D/全周期收益率（15） |
+| 胜率 win_rate | 20 | `win_sells / (win_sells + loss_sells)`，30%→0，70%→满分 |
+| 稳定 consistency | 20 | 正收益天数比例（10）+ 盈亏比（10） |
+| 社交 social | 15 | 被追踪 `follow_count`（10）+ 被备注 `remark_count`（5） |
+| 风险 risk | 15 | `1 - 加权风险比率`（钓鱼/不买持有/卖出大于买入/秒买） |
+
+- 数据窗口：最近 `SCORE_WINDOW_DAYS` 天（默认 90）的 `daily_profit` + `wallet_meta`
+- 样本不足 30 天时，胜率和稳定分按置信度折减（最低 50%）；`metrics.calendar_confidence` 给出置信度
+- 评级：`A ≥ 80`、`B ≥ 60`、`C ≥ 40`、`D < 40`
+- `metrics.meta_available=false` 表示 meta 还没抓到，社交/风险/收益率部分暂为 0，评分是临时值
+- 评分在钱包同步后自动重算；历史钱包由后台任务补算
+
 ---
 
 ## 二、接口列表
@@ -41,10 +142,10 @@
 | 方法 | 端点 | 用途 | 请求参数 |
 |---|---|---|---|
 | POST | `/api/wallets` | 只把地址登记进跟踪列表，**不抓取**任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态 | body: `address` (必填) · `label` (可选) |
-| POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
-| GET | `/api/wallets` | 列出全部跟踪地址及其 label、启用状态、创建时间，可用来核对上一个接口是否登记成功 | 无 |
-| GET | `/api/profit?month=2026-10` | 所有**已启用**地址该月的汇总，每个地址一行，并给出全部地址的总盈亏 `total_pnl`。不传 month 则取当月 | query: `month` (可选, YYYY-MM) |
-| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) |
+| POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果、钱包 `meta`、评分 `score` 和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
+| GET | `/api/wallets` | 分页列出跟踪地址及其 label、启用状态、创建时间、钱包 `meta` 和 `score`。默认/最多 100 个/页 | query: `limit` (可选, 默认 100, 最大 100) · `offset` (可选, 默认 0) |
+| GET | `/api/profit?month=2026-10` | 分页列出**已启用**地址该月汇总，每个地址一行（含 `meta` 和 `score`）；`total_pnl` 是所有启用地址合计。不传 month 则取当月 | query: `month` (可选) · `limit` (可选, 默认/最大 100) · `offset` (可选) |
+| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary` + `meta` + `score`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) |
 | GET | `/profit/<address>?month=2026-10` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
 | GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
 
@@ -73,11 +174,11 @@ curl -X POST https://fnl.bquant.com/api/track \
   -H "Content-Type: application/json" \
   -d '{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01","months":["2026-10"]}'
 
-# 3) 查看地址列表
-curl https://fnl.bquant.com/api/wallets
+# 3) 查看地址列表（分页，默认/最多 100 个/页）
+curl "https://fnl.bquant.com/api/wallets?limit=100&offset=0"
 
-# 4) 全部地址当月汇总 / 单地址每日明细
-curl "https://fnl.bquant.com/api/profit?month=2026-10"
+# 4) 地址当月汇总（分页） / 单地址每日明细
+curl "https://fnl.bquant.com/api/profit?month=2026-10&limit=100&offset=0"
 curl "https://fnl.bquant.com/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
 
 # 5) 健康检查
@@ -103,7 +204,8 @@ r = requests.post(f"{BASE}/api/track",
 print(r.json())
 
 # 读月汇总
-r = requests.get(f"{BASE}/api/profit", params={"month": "2026-10"})
+r = requests.get(f"{BASE}/api/profit",
+                 params={"month": "2026-10", "limit": 100, "offset": 0})
 print(r.json())
 ```
 
@@ -122,7 +224,9 @@ print(r.json())
     "enabled": 1,
     "created_at": "2026-10-28T12:13:50.287281+00:00",
     "updated_at": "2026-10-28T12:13:50.287281+00:00"
-  }
+  },
+  "meta": null,
+  "score": null
 }
 ```
 
@@ -138,6 +242,8 @@ print(r.json())
     {"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}
   ],
   "summary": { "...": "首个成功月份的汇总，结构同 GET /api/profit/<address> 的 summary" },
+  "meta": { "...": "钱包公开统计，结构见上方「钱包 meta」；未抓取到时为 null" },
+  "score": { "...": "钱包评分，结构见上方「钱包评分 score」；未计算时为 null" },
   "profit_url": "/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
 }
 ```
@@ -158,9 +264,12 @@ print(r.json())
       "label": "聪明钱01",
       "enabled": 1,
       "created_at": "2026-10-28T12:13:50.287281+00:00",
-      "updated_at": "2026-10-28T12:13:50.287281+00:00"
+      "updated_at": "2026-10-28T12:13:50.287281+00:00",
+      "meta": { "...": "结构见上方「钱包 meta」；未抓取到时为 null" },
+      "score": { "...": "结构见上方「钱包评分 score」；未计算时为 null" }
     }
-  ]
+  ],
+  "pagination": {"limit": 100, "offset": 0, "total": 15276, "returned": 100, "has_more": true}
 }
 ```
 
@@ -193,13 +302,20 @@ print(r.json())
     "win_rate": 0.7142857142857143,
     "pnl_7d": 320.0,
     "today_pnl": 45.6,
-    "updated_at": "2026-10-28T12:13:50.287281+00:00"
-  } ]
+    "updated_at": "2026-10-28T12:13:50.287281+00:00",
+    "meta": { "...": "结构见上方「钱包 meta」；未抓取到时为 null" },
+    "score": { "...": "结构见上方「钱包评分 score」；未计算时为 null" }
+  } ],
+  "pagination": {"limit": 100, "offset": 0, "total": 15276, "returned": 100, "has_more": true}
 }
 ```
 
 每个钱包行是该地址该月的汇总；`buy_volume` / `sell_volume` / `transfer_*` 都是当月合计。
 `today_pnl` 是当前 UTC 自然日的已实现盈亏（最近一次同步时的值），与 `month` 参数无关。
+`meta` 是 GMGN 公开统计（被追踪/被备注/7D 盈利等），结构见上方「钱包 meta」；未抓取到时为 `null`。
+
+> 行内的 `pnl_7d` 是本服务按日记录计算的近 7 天净盈亏；
+> GMGN 的 7D 统计在 `meta.realized_profit_7d`（USD）和 `meta.pnl_7d`（收益率小数）。
 
 **`GET /api/profit/<address>`**
 
@@ -225,6 +341,8 @@ print(r.json())
     "win_rate": 0.7142857142857143,
     "pnl_7d": 320.0
   },
+  "meta": { "...": "结构见上方「钱包 meta」；未抓取到时为 null" },
+  "score": { "...": "结构见上方「钱包评分 score」；未计算时为 null" },
   "days": [
     {
       "wallet": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
