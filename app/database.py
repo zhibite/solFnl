@@ -382,11 +382,19 @@ class Database:
             rows = conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
 
-    def count_wallets(self, only_enabled: bool = False) -> int:
+    def count_wallets(self, only_enabled: bool = False,
+                      search: Optional[str] = None) -> int:
+        conds: List[str] = []
+        params: List[Any] = []
+        if only_enabled:
+            conds.append("enabled=1")
+        if search:
+            conds.append("(address LIKE ? OR label LIKE ?)")
+            params += [f"%{search}%", f"%{search}%"]
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
         with self._conn() as conn:
-            where = "WHERE enabled=1" if only_enabled else ""
             row = conn.execute(
-                f"SELECT COUNT(*) AS n FROM wallets {where}").fetchone()
+                f"SELECT COUNT(*) AS n FROM wallets {where}", params).fetchone()
             return int(row["n"]) if row else 0
 
     def delete_wallet(self, address: str) -> int:
@@ -754,13 +762,20 @@ class Database:
         return start, end
 
     def get_summaries_page(self, month: str, limit: int,
-                           offset: int) -> List[Dict[str, Any]]:
+                           offset: int,
+                           search: Optional[str] = None
+                           ) -> List[Dict[str, Any]]:
         """One SQL: per-wallet month aggregates + label/enabled, paged."""
         start, end = self._month_range(month)
         cutoff_7d = _recent_cutoff(7)
         today_start = int(datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp())
         today_end = today_start + 86399
+        search_sql = ""
+        search_params: List[Any] = []
+        if search:
+            search_sql = " AND (w.address LIKE ? OR w.label LIKE ?)"
+            search_params = [f"%{search}%", f"%{search}%"]
         with self._conn() as conn:
             cols = {r["name"] for r in conn.execute(
                 "PRAGMA table_info(daily_profit)").fetchall()}
@@ -807,12 +822,12 @@ class Database:
                 LEFT JOIN wallet_score sc ON sc.wallet = w.address
                 LEFT JOIN daily_profit d
                   ON d.wallet = w.address AND d.date >= ? AND d.date <= ?
-                WHERE w.enabled = 1
+                WHERE w.enabled = 1{search_sql}
                 GROUP BY w.address
                 ORDER BY w.created_at DESC, w.address ASC
                 LIMIT ? OFFSET ?
             """, (cutoff_7d, today_start, today_end, start, end,
-                  limit, offset)).fetchall()
+                  *search_params, limit, offset)).fetchall()
             out = []
             for r in rows:
                 row = dict(r)
@@ -959,16 +974,22 @@ class Database:
             targets[wallet]["due_months"].append(row["month"])
         return [targets[w] for w in order[:max(limit, 1)]]
 
-    def get_month_total(self, month: str) -> float:
+    def get_month_total(self, month: str,
+                        search: Optional[str] = None) -> float:
         """Total realized profit across enabled wallets for the month."""
         start, end = self._month_range(month)
+        search_sql = ""
+        params: List[Any] = [start, end]
+        if search:
+            search_sql = " AND (w.address LIKE ? OR w.label LIKE ?)"
+            params += [f"%{search}%", f"%{search}%"]
         with self._conn() as conn:
-            row = conn.execute("""
+            row = conn.execute(f"""
                 SELECT COALESCE(SUM(d.realized_profit), 0) AS total
                 FROM daily_profit d
                 JOIN wallets w ON w.address = d.wallet AND w.enabled = 1
-                WHERE d.date >= ? AND d.date <= ?
-            """, (start, end)).fetchone()
+                WHERE d.date >= ? AND d.date <= ?{search_sql}
+            """, params).fetchone()
             return float(row["total"]) if row else 0.0
 
     # ============ sync_log ============

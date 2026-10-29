@@ -734,16 +734,17 @@ def home(request: Request):
     db = get_db()
     month = _month_param(request)
     page = _page_param(request)
+    q = (request.query_params.get("q") or "").strip()[:100]
     per_page = 30
 
-    total_rows = db.count_wallets(only_enabled=True)
+    total_rows = db.count_wallets(only_enabled=True, search=q)
     total_pages = max((total_rows + per_page - 1) // per_page, 1)
     page = min(page, total_pages)
 
     rows = [dict(s) for s in db.get_summaries_page(
-        month, per_page, (page - 1) * per_page)]
+        month, per_page, (page - 1) * per_page, search=q)]
 
-    total = db.get_month_total(month)
+    total = db.get_month_total(month, search=q)
     sync_stats = db.get_sync_stats()
     months = _target_months(6)
     context = _make_json_safe({
@@ -751,6 +752,7 @@ def home(request: Request):
         "authed": is_authed(request),
         "rows": rows,
         "month": str(month),
+        "q": q,
         "total": float(total),
         "sync_stats": sync_stats,
         "months": months,
