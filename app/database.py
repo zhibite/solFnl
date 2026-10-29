@@ -592,7 +592,7 @@ class Database:
             "value": round(float(row["score"] or 0), 1),
             "grade": row["grade"] or "",
             "window_days": int(row["window_days"] or 90),
-            "meta_available": int(row["meta_available"] or 0),
+            "meta_available": bool(row["meta_available"]),
             "components": detail.get("components") or {},
             "metrics": detail.get("metrics") or {},
             "updated_at": row["updated_at"],

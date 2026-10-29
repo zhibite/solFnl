@@ -73,6 +73,7 @@
         <p><strong class="text-gray-300">③ 请求格式：</strong>POST 接口必须带请求头 <code class="font-mono text-primary">Content-Type: application/json</code>，请求体是一个 JSON 对象；GET 接口用 query 参数传月份。</p>
         <p><strong class="text-gray-300">④ 返回格式：</strong>统一返回 JSON，其中 <code class="font-mono text-primary">success</code> 是布尔值表示成败。失败时 HTTP 状态码仍是 200，请在 <code class="font-mono text-primary">message</code> 字段里读具体原因，不要只看状态码。</p>
         <p><strong class="text-gray-300">⑤ 分页：</strong><code class="font-mono">GET /api/wallets</code> 和 <code class="font-mono">GET /api/profit</code> 默认/最多返回 100 个钱包/页，用 <code class="font-mono text-primary">limit</code> + <code class="font-mono text-primary">offset</code> 翻页，响应带 <code class="font-mono text-primary">pagination</code>。</p>
+        <p><strong class="text-gray-300">⑥ 批量：</strong><code class="font-mono">POST /api/wallets/batch</code> 最多 500 个地址；<code class="font-mono">POST /api/profit/batch</code> 默认最多 30 个地址。</p>
     </div>
 
     <div class="overflow-x-auto">
@@ -94,9 +95,21 @@
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-green-700/50">POST</span></td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/wallets/batch</td>
+                    <td class="py-3 px-6 text-gray-300">批量登记，不抓取；最多 500 个/次</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">body: <span class="text-primary">wallets</span> / <span class="text-primary">addresses</span> 数组</td>
+                </tr>
+                <tr class="hover:bg-gray-700/20 transition">
+                    <td class="py-3 px-6"><span class="inline-block bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-green-700/50">POST</span></td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/track</td>
                     <td class="py-3 px-6 text-gray-300">登记地址并<span class="text-primary">立即抓取</span>历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长</td>
                     <td class="py-3 px-6 font-mono text-xs text-gray-400">body: <span class="text-primary">address</span> (必填) · <span class="text-primary">label</span> (可选) · <span class="text-primary">months</span> (可选, 如 ["2026-10"])</td>
+                </tr>
+                <tr class="hover:bg-gray-700/20 transition">
+                    <td class="py-3 px-6"><span class="inline-block bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-green-700/50">POST</span></td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-300">/api/profit/batch</td>
+                    <td class="py-3 px-6 text-gray-300">批量查询最多 30 个指定地址某月汇总（含精简 meta/score）；用缓存，不逐地址实时刷新</td>
+                    <td class="py-3 px-6 font-mono text-xs text-gray-400">body: <span class="text-primary">addresses</span> (≤30) · <span class="text-primary">month</span> (可选) · <span class="text-primary">include_days</span> (可选) · <span class="text-primary">include_details</span> (可选)</td>
                 </tr>
                 <tr class="hover:bg-gray-700/20 transition">
                     <td class="py-3 px-6"><span class="inline-block bg-blue-900/30 text-blue-300 px-2 py-1 rounded text-xs font-mono font-semibold border border-blue-700/50">GET</span></td>
@@ -165,7 +178,17 @@ curl <span class="text-primary">"http://127.0.0.1:8038/api/wallets?limit=100&off
 curl <span class="text-primary">"http://127.0.0.1:8038/api/profit?month=2026-10&limit=100&offset=0"</span>
 curl <span class="text-primary">"http://127.0.0.1:8038/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"</span>
 
-<span class="text-gray-500"># 5) 健康检查</span>
+<span class="text-gray-500"># 5) 批量登记（最多 500）</span>
+curl -X POST http://127.0.0.1:8038/api/wallets/batch \
+  -H <span class="text-green-300">"Content-Type: application/json"</span> \
+  -d <span class="text-primary">'{&#34;wallets&#34;:[{&#34;address&#34;:&#34;Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN&#34;,&#34;label&#34;:&#34;聪明钱01&#34;}]}'</span>
+
+<span class="text-gray-500"># 6) 批量查询（最多 30）</span>
+curl -X POST http://127.0.0.1:8038/api/profit/batch \
+  -H <span class="text-green-300">"Content-Type: application/json"</span> \
+  -d <span class="text-primary">'{&#34;addresses&#34;:[&#34;Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN&#34;],&#34;month&#34;:&#34;2026-10&#34;}'</span>
+
+<span class="text-gray-500"># 7) 健康检查</span>
 curl http://127.0.0.1:8038/api/health</pre>
     </div>
 
@@ -175,6 +198,8 @@ curl http://127.0.0.1:8038/api/health</pre>
             <p class="font-semibold text-gray-300 mb-2">📤 返回示例</p>
             <ul class="space-y-1 list-disc list-inside">
                 <li><code class="font-mono">POST /api/wallets</code> → <code class="font-mono text-primary">{"success": true, "wallet": {"address": "...", "label": "...", "enabled": 1, "created_at": "...", "updated_at": "..."}}</code></li>
+                <li><code class="font-mono">POST /api/wallets/batch</code> → <code class="font-mono text-primary">{"success": true, "added": 10, "updated": 2, "skipped": 0, "invalid": 1, "total": 13}</code></li>
+                <li><code class="font-mono">POST /api/profit/batch</code> → <code class="font-mono text-primary">{"success": true, "month": "2026-10", "requested": 2, "count": 2, "summary": {"ok": 1, "not_found": 1}, "results": [...]}</code>，每个 result 带 <code class="font-mono">status/summary/meta/score</code>。</li>
                 <li><code class="font-mono">POST /api/track</code> → <code class="font-mono text-primary">{"success": true, "wallet": "...", "added": true, "months": ["2026-10"], "results": [{"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}], "summary": {...}, "profit_url": "/profit/...?month=2026-10"}</code>，其中 <code class="font-mono">added</code> 表示这次是不是新加的地址，<code class="font-mono">results</code> 是每月抓取结果。全部月份失败时 <code class="font-mono">success</code> 为 false。</li>
                 <li><code class="font-mono">GET /api/profit</code> → <code class="font-mono text-primary">{"success": true, "month": "2026-10", "total_pnl": 1234.5, "wallets": [...]}</code></li>
                 <li><code class="font-mono">GET /api/profit/&lt;address&gt;</code> → <code class="font-mono text-primary">{"success": true, "wallet": "...", "month": "2026-10", "summary": {...}, "days": [...]}</code>，<code class="font-mono">days[]</code> 每项对应一天的记录。</li>
@@ -187,10 +212,12 @@ curl http://127.0.0.1:8038/api/health</pre>
                 <li><code class="font-mono">invalid solana address</code> — 地址不是合法的 Solana 地址（长度或字符集不对）。</li>
                 <li><code class="font-mono">body must be JSON</code> — 没带 <code class="font-mono">Content-Type: application/json</code>，或 body 不是合法 JSON。</li>
                 <li><code class="font-mono">months must be a list of YYYY-MM strings</code> — <code class="font-mono">months</code> 不是数组，或元素不是合法的 <code class="font-mono">YYYY-MM</code>；省略或传 <code class="font-mono">[]</code> 时按默认月份处理。</li>
+                <li><code class="font-mono">addresses must be a non-empty list</code> / <code class="font-mono">too many addresses (max 30)</code> — 批量查询地址数组为空或超过 30 个。</li>
+                <li><code class="font-mono">wallets must be a non-empty list</code> / <code class="font-mono">too many wallets (max 500)</code> — 批量登记数组为空或超过 500 个。</li>
                 <li><code class="font-mono">wallet saved but sync failed: ...</code> — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 <code class="font-mono">/api/track</code> 或等定时任务重试。</li>
             </ul>
         </div>
-        <p class="pt-1 border-t border-gray-700/30">💡 <strong>怎么选：</strong>只想批量加地址选 <code class="font-mono text-primary">/api/wallets</code>（瞬间返回）；想加完马上拿到数据选 <code class="font-mono text-primary">/api/track</code>（会等待抓取完成）。拿到数据后用 <code class="font-mono text-primary">/api/profit</code> 系列读结果。</p>
+        <p class="pt-1 border-t border-gray-700/30">💡 <strong>怎么选：</strong>批量加地址选 <code class="font-mono text-primary">/api/wallets/batch</code>（≤500，瞬间返回）；批量查指定地址选 <code class="font-mono text-primary">/api/profit/batch</code>（≤30）；单个地址加完马上拿数据选 <code class="font-mono text-primary">/api/track</code>。拿到数据后用 <code class="font-mono text-primary">/api/profit</code> 系列读结果。</p>
     </div>
 </div>
 {% endblock %}

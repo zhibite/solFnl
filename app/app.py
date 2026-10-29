@@ -77,6 +77,9 @@ MAX_IMPORT_BYTES = 5 * 1024 * 1024
 MAX_IMPORT_ITEMS = 50000
 # Public list endpoints return at most this many wallets per request.
 MAX_LIST_LIMIT = 100
+MAX_BATCH_WALLETS = max(int(os.getenv("MAX_BATCH_WALLETS", "500")), 1)
+MAX_BATCH_PROFIT_ADDRESSES = max(
+    int(os.getenv("MAX_BATCH_PROFIT_ADDRESSES", "30")), 1)
 
 AUTH_USERNAME = "zengsw"
 # No hard-coded default password: a missing/empty env gets a one-off random
@@ -1131,7 +1134,205 @@ async def api_sync_wallet(request: Request):
             "pnl_7d": sum(d["realized_profit"] for d in latest)}
 
 
+_COMPACT_META_FIELDS = (
+    "follow_count", "remark_count", "tags", "has_data",
+    "realized_profit_7d", "pnl_7d", "buy_7d", "sell_7d",
+    "balance", "total_profit", "total_profit_pnl",
+    "fetched_at", "last_error",
+)
+
+
+def _compact_meta(meta: Optional[Dict[str, Any]]
+                  ) -> Optional[Dict[str, Any]]:
+    if not meta:
+        return None
+    return {k: meta.get(k) for k in _COMPACT_META_FIELDS if k in meta}
+
+
+def _compact_score(score: Optional[Dict[str, Any]]
+                   ) -> Optional[Dict[str, Any]]:
+    if not score:
+        return None
+    return {k: score.get(k) for k in
+            ("value", "grade", "window_days", "meta_available", "updated_at")
+            if k in score}
+
+
+def _profit_batch_item(db, address: str, month: str,
+                       include_days: bool,
+                       include_details: bool = False) -> Dict[str, Any]:
+    """One item of the batch profit query (no live meta refresh)."""
+    if not is_valid_sol_address(address):
+        return {"address": address, "status": "invalid_address",
+                "message": "invalid solana address"}
+    try:
+        wallet = db.get_wallet(address)
+        if not wallet:
+            return {
+                "address": address,
+                "status": "not_found",
+                "message": "address not tracked yet, call POST /api/track to add it",
+                "action": {
+                    "method": "POST",
+                    "endpoint": "/api/track",
+                    "body": {"address": address},
+                    "description": "登记该地址并立即抓取历史盈利数据",
+                },
+            }
+
+        days = db.get_daily(address, month)
+        for day in days:
+            day.pop("synced_at", None)
+
+        meta = db.get_wallet_meta(address)
+        score = db.get_wallet_score(address)
+        if not include_details:
+            meta = _compact_meta(meta)
+            score = _compact_score(score)
+
+        if not days:
+            slog = db.get_last_sync_log(address, month)
+            has_synced = bool(slog and slog.get("status") == "ok")
+            if not has_synced:
+                return {
+                    "address": address,
+                    "status": "pending",
+                    "month": month,
+                    "message": ("address is tracked but profit data is not "
+                                "available yet, it will appear after the next sync"),
+                    "retry_after_seconds": max(SYNC_INTERVAL_MIN, 5) * 60,
+                    "summary": None,
+                    "meta": meta,
+                    "score": score,
+                }
+
+        summary = db.get_month_summary(address, month, days=days)
+        result = {
+            "address": address,
+            "status": "ok",
+            "month": month,
+            "summary": summary,
+            "meta": meta,
+            "score": score,
+        }
+        if include_days:
+            result["days"] = days
+        return result
+    except Exception as e:  # noqa: BLE001
+        log.error("batch profit error %s: %s", address, e, exc_info=True)
+        return {"address": address, "status": "error",
+                "message": f"internal error: {str(e)[:100]}"}
+
+
+def _profit_batch(addresses: List[str], month: str, include_days: bool,
+                  include_details: bool = False) -> List[Dict[str, Any]]:
+    db = get_db()
+    return [_profit_batch_item(db, address, month, include_days,
+                               include_details)
+            for address in addresses]
+
+
 # ============ public data API (external callers) ============
+@app.post("/api/wallets/batch")
+async def api_wallets_batch(request: Request):
+    """Register up to 500 wallets without syncing them.
+
+    Body: {"wallets": [{"address": "...", "label": "..."}, ...]}
+    Also accepts {"addresses": [...]}, a bare list, or a single wallet object.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"success": False, "message": "body must be JSON"}
+    if isinstance(body, list):
+        items = body
+    elif isinstance(body, dict):
+        items = body.get("wallets", body.get("addresses"))
+        if items is None and body.get("address"):
+            items = [body]
+        if items is None:
+            items = []
+    else:
+        items = []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list) or not items:
+        return {"success": False,
+                "message": "wallets must be a non-empty list"}
+    if len(items) > MAX_BATCH_WALLETS:
+        return {"success": False,
+                "message": f"too many wallets (max {MAX_BATCH_WALLETS})"}
+    res = await asyncio.to_thread(get_db().import_wallets, items)
+    log.info("[BATCH-IMPORT] %s", res)
+    return {"success": True, **res, "total": len(items)}
+
+
+@app.post("/api/profit/batch")
+async def api_profit_batch(request: Request):
+    """Query up to 100 wallets for one month in one request.
+
+    Body: {"addresses": ["..."], "month": "2026-10",
+           "include_days": false}
+    Uses cached meta/score (no live GMGN refresh per address).
+    """
+    try:
+        body = _body_dict(await request.json())
+    except Exception:
+        return {"success": False, "message": "body must be JSON"}
+    raw = body.get("addresses")
+    if not isinstance(raw, list) or not raw:
+        return {"success": False,
+                "message": "addresses must be a non-empty list"}
+    if len(raw) > MAX_BATCH_PROFIT_ADDRESSES:
+        return {"success": False,
+                "message": (f"too many addresses "
+                            f"(max {MAX_BATCH_PROFIT_ADDRESSES})")}
+    month = str(body.get("month") or _target_months(0)[0])
+    if not is_valid_month(month):
+        return {"success": False,
+                "message": "invalid month format, use YYYY-MM"}
+    raw_days = body.get("include_days", False)
+    if isinstance(raw_days, str):
+        include_days = raw_days.strip().lower() in ("1", "true", "yes")
+    else:
+        include_days = bool(raw_days)
+    raw_details = body.get("include_details", False)
+    if isinstance(raw_details, str):
+        include_details = raw_details.strip().lower() in ("1", "true", "yes")
+    else:
+        include_details = bool(raw_details)
+
+    addresses: List[str] = []
+    seen = set()
+    for item in raw:
+        address = str(item).strip()
+        if address and address not in seen:
+            seen.add(address)
+            addresses.append(address)
+    if not addresses:
+        return {"success": False,
+                "message": "addresses must contain at least one non-empty value"}
+
+    results = await asyncio.to_thread(
+        _profit_batch, addresses, month, include_days, include_details)
+    counts = {key: 0 for key in
+              ("ok", "pending", "not_found", "invalid_address", "error")}
+    for result in results:
+        status = result.get("status") or "error"
+        counts[status] = counts.get(status, 0) + 1
+    return {
+        "success": True,
+        "month": month,
+        "requested": len(raw),
+        "count": len(results),
+        "duplicates_removed": len(raw) - len(addresses),
+        "include_days": include_days,
+        "include_details": include_details,
+        "summary": counts,
+        "results": results,
+    }
+
+
 @app.post("/api/track")
 async def api_track(request: Request):
     """Track a new address: add if missing, crawl profit, store to DB.

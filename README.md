@@ -116,6 +116,8 @@ python app/verify_flow.py
 |---|---|---|---|
 | POST | `/api/wallets` | 只把地址登记进跟踪列表，**不抓取**任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态 | body: `address` (必填) · `label` (可选) |
 | POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
+| POST | `/api/wallets/batch` | 批量登记地址，**不抓取**数据；最多 500 个/次 | body: `wallets` 或 `addresses` 数组，元素为地址字符串或 `{address,label,enabled}` |
+| POST | `/api/profit/batch` | 批量查询最多 30 个地址某月的汇总，返回每个地址的 `summary/meta/score` | body: `addresses` (必填, ≤30) · `month` (可选) · `include_days` (可选, 默认 false) · `include_details` (可选, 默认 false) |
 | GET | `/api/wallets` | 分页列出跟踪地址及其 label、meta、score，可用来核对登记结果。默认/最多 100 个/页 | query: `limit` (可选, 默认 100, 最大 100) · `offset` (可选, 默认 0) |
 | GET | `/api/profit?month=2026-09` | 分页列出**已启用**地址该月汇总，每个地址一行（含 meta/score）；`total_pnl` 是所有启用地址的合计。不传 month 则取当月 | query: `month` (可选) · `limit` (可选, 默认/最大 100) · `offset` (可选) |
 | GET | `/api/profit/<address>?month=2026-09` | 单个地址的每日明细，`days[]` 按天给买入/卖出、转入/转出的笔数与金额、胜负单数和已实现盈亏，外加 `summary`、`meta`、`score`。默认实时刷新 meta（60 秒缓存），`refresh=0` 可跳过 | path: `<address>` · query: `month` (可选) · `refresh` (可选, 默认 1) |
@@ -148,13 +150,25 @@ curl "https://fnl.bquant.com/api/wallets?limit=100&offset=0"
 curl "https://fnl.bquant.com/api/profit?month=2026-10&limit=100&offset=0"
 curl "https://fnl.bquant.com/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
 
-# 5) 健康检查
+# 5) 批量登记地址（最多 500）
+curl -X POST https://fnl.bquant.com/api/wallets/batch \
+  -H "Content-Type: application/json" \
+  -d '{"wallets":[{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01"}]}'
+
+# 6) 批量查询（最多 30 个地址；默认精简 meta/score）
+curl -X POST https://fnl.bquant.com/api/profit/batch \
+  -H "Content-Type: application/json" \
+  -d '{"addresses":["Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN"],"month":"2026-10","include_details":false}'
+
+# 7) 健康检查
 curl https://fnl.bquant.com/api/health
 ```
 
 ### 返回示例
 
 - `POST /api/wallets` → `{"success": true, "wallet": {"address": "...", "label": "...", "enabled": 1, "created_at": "...", "updated_at": "..."}}`
+- `POST /api/wallets/batch` → `{"success": true, "added": 10, "updated": 2, "skipped": 0, "invalid": 1, "total": 13}`
+- `POST /api/profit/batch` → `{"success": true, "month": "2026-10", "requested": 2, "count": 2, "duplicates_removed": 0, "include_days": false, "include_details": false, "summary": {"ok": 1, "not_found": 1, ...}, "results": [{"address": "...", "status": "ok", "summary": {...}, "meta": {...}, "score": {...}}, ...]}`，默认 `meta/score` 是精简字段，`include_details=true` 才返回完整评分明细
 - `POST /api/track` → `{"success": true, "wallet": "...", "added": true, "months": ["2026-10"], "results": [{"month": "2026-10", "days": 21, "pnl": 123.4, "source": "gmgn"}], "summary": {...}, "profit_url": "/profit/...?month=2026-10"}`，其中 `added` 表示这次是不是新加的地址，`results` 是每月抓取结果。若所有月份都抓取失败，`success` 为 `false` 且 `message` 以 `wallet saved but sync failed` 开头（地址仍会保留）。
 - `GET /api/wallets?limit=100&offset=0` → `{"success": true, "wallets": [...], "pagination": {"limit": 100, "offset": 0, "total": 15276, "returned": 100, "has_more": true}}`
 - `GET /api/profit?month=2026-10&limit=100&offset=0` → `{"success": true, "month": "2026-10", "total_pnl": 1234.5, "wallets": [...], "pagination": {...}}`
@@ -177,9 +191,13 @@ curl https://fnl.bquant.com/api/health
 - `invalid solana address` — 地址不是合法的 Solana 地址（长度或字符集不对）。
 - `body must be JSON` — 没带 `Content-Type: application/json`，或 body 不是合法 JSON。
 - `months must be a list of YYYY-MM strings` — `months` 不是数组，或元素不是合法月份（省略或传 `[]` 时按默认月份处理）。
+- `addresses must be a non-empty list` — `/api/profit/batch` 没传地址数组或数组为空。
+- `too many addresses (max 30)` — 批量查询超过当前上限（默认 30，可用 `MAX_BATCH_PROFIT_ADDRESSES` 调整）。
+- `wallets must be a non-empty list` — `/api/wallets/batch` 没传地址数组或数组为空。
+- `too many wallets (max 500)` — 批量登记超过 500 个地址。
 - `wallet saved but sync failed: ...` — 地址已经存进去了，只是这次抓取失败，可稍后重新调用 `/api/track` 或等定时任务重试。
 
-**怎么选**：只想批量加地址选 `/api/wallets`（瞬间返回）；想加完马上拿到数据选 `/api/track`（会等待抓取完成）。拿到数据后用 `/api/profit` 系列读结果。
+**怎么选**：批量加地址选 `/api/wallets/batch`（≤500，瞬间返回）；批量查指定地址选 `/api/profit/batch`（默认≤30，精简 meta/score）；单个地址加完马上拿数据选 `/api/track`（会等待抓取完成）。拿到数据后用 `/api/profit` 系列读结果。
 
 ## 目录
 
@@ -219,5 +237,7 @@ docs/debot.md       # Debot 抓包样本（历史参考）
 | `SYNC_MAX_REQUESTS_PER_TICK` | `60` | 每批最多发起多少个 GMGN 请求 |
 | `SYNC_LOG_RETENTION_DAYS` | `7` | `sync_log` 保留天数（过期自动清理） |
 | `TRACK_MAX_CONCURRENT` | `4` | `/api/track` 同时抓取的最大并发数 |
+| `MAX_BATCH_WALLETS` | `500` | `/api/wallets/batch` 单次最大地址数 |
+| `MAX_BATCH_PROFIT_ADDRESSES` | `30` | `/api/profit/batch` 单次最大地址数 |
 | `DATABASE_PATH` | `/data/gmgndaily.db` | SQLite 路径 |
 | `CHAIN` | `solana` | 链参数；GMGN 客户端会自动把 `solana` 转成 `sol` |

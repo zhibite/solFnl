@@ -13,7 +13,7 @@
   （本地自测时为 `http://127.0.0.1:8038`，端口由环境变量 `PORT` 决定，默认 `8038`。）
 - **鉴权**：对外接口全部开放，**不需要登录、不要带 Cookie 或 token**，直接请求即可。
 - **请求格式**：
-  - POST 接口必须带请求头 `Content-Type: application/json`，请求体是一个 JSON 对象。
+  - POST 接口必须带请求头 `Content-Type: application/json`，请求体通常是 JSON 对象（`/api/wallets/batch` 也接受数组）。
   - GET 接口用 query 参数传月份等可选值。
 - **返回格式**：统一返回 JSON，其中 `success` 是布尔值表示成败。
   **失败时 HTTP 状态码仍是 200**，请读 `message` 字段拿具体原因，不要只看状态码。
@@ -32,6 +32,30 @@
 - `GET /api/profit` 的 `total_pnl` 是**所有启用地址**的合计，不是当前页合计
 - 需要更多数据时继续增大 `offset`；单地址详情用 `GET /api/profit/<address>`
 
+### 批量接口
+
+**`POST /api/wallets/batch`**：批量登记，不抓取，最多 500 个。
+
+```json
+{"wallets": [{"address": "Gavtn...", "label": "聪明钱01"}, "地址字符串也可以"]}
+```
+
+返回：`{"success": true, "added": 10, "updated": 2, "skipped": 0, "invalid": 1, "total": 13}`
+
+**`POST /api/profit/batch`**：批量查询，默认最多 30 个地址（`MAX_BATCH_PROFIT_ADDRESSES` 可调）。
+
+```json
+{"addresses": ["Gavtn...", "..."], "month": "2026-10",
+ "include_days": false, "include_details": false}
+```
+
+- `month` 省略时取当月
+- `include_days=false`（默认）只返回 `summary/meta/score`；为 `true` 时额外返回每日明细
+- `include_details=false`（默认）返回精简 `meta`（关注/备注/7D/余额等）和精简 `score`（value/grade 等）；为 `true` 时才返回完整的风险字段和评分明细
+- 使用缓存的 meta/score，不会逐地址实时请求 GMGN；需要实时刷新请用单地址接口
+- 结果中每个地址的 `status` 为 `ok / pending / not_found / invalid_address / error`
+- 响应还包含 `requested`、`count`、`duplicates_removed`、`include_days`、`include_details` 和按状态汇总的 `summary`
+
 ## 状态返回（查询单地址时）
 
 调用 `GET /api/profit/<address>` 时，外部方会得到以下四种状态之一（HTTP 均为 200，用 `status` 字段区分）：
@@ -49,7 +73,7 @@
 
 ## 钱包 meta（公开统计）
 
-`GET /api/wallets`、`GET /api/profit`、`GET /api/profit/<address>` 会附带 `meta` 对象（未抓取到时为 `null`）：
+`GET /api/wallets`、`GET /api/profit`、`GET /api/profit/<address>`、`POST /api/track` 会附带 `meta` 对象；`POST /api/profit/batch` 默认返回精简 meta（未抓取到时为 `null`）：
 
 ```json
 {
@@ -136,7 +160,7 @@
 - 样本不足 30 天时，胜率和稳定分按置信度折减（最低 50%）；`metrics.calendar_confidence` 给出置信度
 - 评级：`A ≥ 80`、`B ≥ 60`、`C ≥ 40`、`D < 40`
 - `meta_available=false`（`metrics.meta_available` 同值）表示 meta 还没抓到，社交/风险/收益率部分暂为 0，评分是临时值
-- 评分在钱包同步后自动重算；历史钱包由后台任务补算
+- 评分在钱包同步、meta 刷新、单地址实时刷新后自动重算；历史钱包由后台任务补算
 
 ---
 
@@ -146,15 +170,17 @@
 |---|---|---|---|
 | POST | `/api/wallets` | 只把地址登记进跟踪列表，**不抓取**任何数据。适合先批量收地址、之后再统一同步；地址已存在时只更新非空 label，并保留原有启用状态 | body: `address` (必填) · `label` (可选) |
 | POST | `/api/track` | 登记地址并**立即抓取**历史数据入库，返回抓取结果、钱包 `meta`、评分 `score` 和可分享的盈利页地址。抓取耗时较长 | body: `address` (必填) · `label` (可选) · `months` (可选, 如 `["2026-10"]`) |
+| POST | `/api/wallets/batch` | 批量登记地址，不抓取；最多 500 个/次 | body: `wallets` 或 `addresses` 数组，元素为地址字符串或 `{address,label,enabled}` |
+| POST | `/api/profit/batch` | 批量查询最多 30 个地址某月汇总，返回每地址 `summary/meta/score` | body: `addresses` (必填, ≤30) · `month` (可选) · `include_days` (可选, 默认 false) · `include_details` (可选, 默认 false) |
 | GET | `/api/wallets` | 分页列出跟踪地址及其 label、启用状态、创建时间、钱包 `meta` 和 `score`。默认/最多 100 个/页 | query: `limit` (可选, 默认 100, 最大 100) · `offset` (可选, 默认 0) |
 | GET | `/api/profit?month=2026-10` | 分页列出**已启用**地址该月汇总，每个地址一行（含 `meta` 和 `score`）；`total_pnl` 是所有启用地址合计。不传 month 则取当月 | query: `month` (可选) · `limit` (可选, 默认/最大 100) · `offset` (可选) |
-| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary` + `meta` + `score`；地址存在但数据未就绪时告知稍后重试；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) · `refresh` (可选, 默认 1) |
+| GET | `/api/profit/<address>?month=2026-10` | **状态查询**（见下方"状态返回"表）：地址存在且有数据时返回每日明细 `days[]` + `summary` + `meta` + `score`；不传 month 则取最近 500 天；地址未被跟踪时返回添加指令 | path: `<address>` · query: `month` (可选) · `refresh` (可选, 默认 1) |
 | GET | `/profit/<address>?month=2026-10` | 同一份数据的网页版，浏览器直接打开即可看图表，链接可分享给别人 | path: `<address>` · query: `month` (可选) |
 | GET | `/api/health` | 健康检查，返回 `{"success": true, "service": "gmgndaily"}`，可用于探活 | 无 |
 
 ---
 
-## 三、请求参数详解（两个 POST 接口通用）
+## 三、单地址 POST 接口参数（`/api/wallets`、`/api/track`）
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
@@ -184,7 +210,17 @@ curl "https://fnl.bquant.com/api/wallets?limit=100&offset=0"
 curl "https://fnl.bquant.com/api/profit?month=2026-10&limit=100&offset=0"
 curl "https://fnl.bquant.com/api/profit/Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN?month=2026-10"
 
-# 5) 健康检查
+# 5) 批量登记（最多 500）
+curl -X POST https://fnl.bquant.com/api/wallets/batch \
+  -H "Content-Type: application/json" \
+  -d '{"wallets":[{"address":"Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN","label":"聪明钱01"}]}'
+
+# 6) 批量查询（默认最多 30，精简 meta/score）
+curl -X POST https://fnl.bquant.com/api/profit/batch \
+  -H "Content-Type: application/json" \
+  -d '{"addresses":["Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN"],"month":"2026-10","include_details":false}'
+
+# 7) 健康检查
 curl https://fnl.bquant.com/api/health
 ```
 
@@ -233,6 +269,19 @@ print(r.json())
 }
 ```
 
+**`POST /api/wallets/batch`**
+
+```json
+{
+  "success": true,
+  "added": 10,
+  "updated": 2,
+  "skipped": 0,
+  "invalid": 1,
+  "total": 13
+}
+```
+
 **`POST /api/track`**
 
 ```json
@@ -255,6 +304,41 @@ print(r.json())
 - `months` 是本次请求的月份列表；`results` 是按月的抓取结果，失败的月份会带 `error`。
 - 所有月份都失败时 `success` 为 `false`，`message` 以 `wallet saved but sync failed` 开头（地址仍会保存）。
 - `profit_url` 是相对路径，拼上基础地址即可在浏览器打开。
+
+**`POST /api/profit/batch`**
+
+```json
+{
+  "success": true,
+  "month": "2026-10",
+  "requested": 2,
+  "count": 2,
+  "duplicates_removed": 0,
+  "include_days": false,
+  "include_details": false,
+  "summary": {"ok": 1, "pending": 0, "not_found": 1, "invalid_address": 0, "error": 0},
+  "results": [
+    {
+      "address": "Gavtn1EfSV7s3xvUoZruDCnyoVU94WT2KA7WSnAzdxzN",
+      "status": "ok",
+      "month": "2026-10",
+      "summary": { "...": "同单地址 summary" },
+      "meta": { "...": "钱包 meta" },
+      "score": { "...": "钱包评分" }
+    },
+    {
+      "address": "11111111111111111111111111111111",
+      "status": "not_found",
+      "message": "address not tracked yet, call POST /api/track to add it",
+      "action": { "...": "同单地址 not_found 的 action" }
+    }
+  ]
+}
+```
+
+- `include_days=true` 时每个 `ok` 结果还会带 `days[]`
+- `include_details=true` 时 `meta/score` 才包含完整风险字段和评分明细；默认是精简字段
+- 批量查询使用缓存的 meta/score；需要实时刷新请用单地址接口
 
 **`GET /api/wallets`**
 
@@ -380,7 +464,9 @@ print(r.json())
   "message": "address is tracked but profit data is not available yet, it will appear after the next sync",
   "retry_after_seconds": 3600,
   "summary": null,
-  "days": []
+  "days": [],
+  "meta": { "...": "结构见上方「钱包 meta」；未抓取到时为 null" },
+  "score": { "...": "结构见上方「钱包评分 score」；未计算时为 null" }
 }
 ```
 
@@ -434,6 +520,10 @@ print(r.json())
 | `invalid month format, use YYYY-MM` | `month` 参数格式不对 | 传 `2026-10` 这样的 `YYYY-MM` 格式，或直接省略该参数 |
 | `body must be JSON` | 没带 `Content-Type: application/json`，或 body 不是合法 JSON | 补请求头，确认 body 是合法 JSON |
 | `months must be a list of YYYY-MM strings` | `months` 不是数组，或元素不是合法月份 | 传 `["2026-10"]` 这样的数组；省略或传 `[]` 时按默认月份处理 |
+| `addresses must be a non-empty list` | `/api/profit/batch` 地址数组为空或格式不对 | 传非空 `addresses` 数组，默认最多 30 个 |
+| `too many addresses (max 30)` | 批量查询超过当前上限（默认 30） | 拆成多次请求，或调整 `MAX_BATCH_PROFIT_ADDRESSES` |
+| `wallets must be a non-empty list` | `/api/wallets/batch` 地址数组为空或格式不对 | 传非空 `wallets`/`addresses` 数组，最多 500 个 |
+| `too many wallets (max 500)` | 批量登记超过 500 个地址 | 拆成多次请求 |
 | `wallet saved but sync failed: ...` | 地址已经存进去了，只是这次抓取失败 | 可稍后重新调用 `/api/track`，或等定时任务重试；`profit_url` 仍可用于查看已有数据 |
 
 > 注意：`GET /api/profit/<address>` 的错误信息放在 `message` 字段，同时 `status` 会是
@@ -444,8 +534,9 @@ print(r.json())
 
 ## 七、怎么选接口
 
-- 只想**批量加地址** → `POST /api/wallets`（瞬间返回，不触发抓取）。
+- 只想**批量加地址** → `POST /api/wallets/batch`（最多 500，瞬间返回，不触发抓取）；单个可用 `POST /api/wallets`。
 - 想**加完马上拿数据** → `POST /api/track`（会等待抓取完成，耗时较长）。
+- 想**一次查一批指定地址** → `POST /api/profit/batch`（默认最多 30，返回每月汇总/精简 meta/score）；要完整评分明细加 `"include_details": true`，要每日明细加 `"include_days": true`。
 - 拿到数据后用 `GET /api/profit` 系列读结果：整体看 `GET /api/profit`，单地址看 `GET /api/profit/<address>`，要给人看就用 `GET /profit/<address>`（网页版）。
 
 典型流程：
