@@ -224,6 +224,25 @@
 
 {% block scripts %}
 <script>
+function showToast(message, isError) {
+    let el = document.getElementById('sync-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'sync-toast';
+        document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.className = 'fixed bottom-6 right-6 z-50 max-w-md break-words '
+        + 'px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white '
+        + (isError ? 'bg-danger/90' : 'bg-success/90');
+}
+
+function fmtMoney(value) {
+    const n = Number(value || 0);
+    return n.toLocaleString('en-US', {minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2});
+}
+
 async function syncOne(address, btn) {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '⏳ 更新中…'; btn.disabled = true; }
@@ -237,7 +256,15 @@ async function syncOne(address, btn) {
         }
         const r = await res.json();
         if (!r.success) { alert('更新失败：' + (r.message || '未知')); return; }
-        location.reload();
+        if (r.meta_ok === false) {
+            showToast('数据已更新，但 GMGN 7D 刷新失败：'
+                      + (r.meta_error || '未知错误'), true);
+            setTimeout(() => location.reload(), 2500);
+            return;
+        }
+        showToast('已更新：今日 ' + fmtMoney(r.today_pnl)
+                  + ' · 7D ' + fmtMoney(r.pnl_7d));
+        setTimeout(() => location.reload(), 1500);
     } catch (e) {
         alert('更新失败：' + e.message);
     } finally {

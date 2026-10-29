@@ -1119,27 +1119,36 @@ async def api_sync_wallet(request: Request):
         log.warning("[SYNC-ONE] %s failed: %s", address[:10], e)
         return {"success": False, "message": str(e)}
     # Manual refresh also refreshes follow/remark/7d + score immediately.
+    meta_result: Dict[str, Any] = {}
     try:
-        await asyncio.to_thread(sync_wallet_meta_and_score, address,
-                                META_LIVE_TIMEOUT_SECONDS)
+        meta_result = await asyncio.to_thread(
+            sync_wallet_meta_and_score, address, META_LIVE_TIMEOUT_SECONDS)
         res["meta"] = db.get_wallet_meta(address)
         res["score"] = db.get_wallet_score(address)
     except Exception as e:
+        meta_result = {"ok": False, "error": str(e)}
         log.warning("[SYNC-ONE] %s meta refresh failed: %s",
                     address[:10], e)
     ok_months = [m for m in res["months"] if "error" not in m]
     if not ok_months:
         return {"success": False, "message": "sync failed",
                 "results": res["months"], "meta": res.get("meta"),
-                "score": res.get("score")}
+                "score": res.get("score"),
+                "meta_ok": bool(meta_result.get("ok")),
+                "meta_error": meta_result.get("error") or ""}
     latest = db.get_recent_daily(address, days=7)
+    today_start, _ = _today_range_utc()
     return {"success": True, "wallet": address,
             "total_days": res["total_days"],
             "months": [m["month"] for m in ok_months],
             "results": res["months"],
             "meta": res.get("meta"),
             "score": res.get("score"),
+            "meta_ok": bool(meta_result.get("ok")),
+            "meta_error": meta_result.get("error") or "",
             "sync_stats": db.get_sync_stats(),
+            "today_pnl": sum(d["realized_profit"] for d in latest
+                             if d["date"] >= today_start),
             "pnl_7d": sum(d["realized_profit"] for d in latest)}
 
 
